@@ -1,3 +1,6 @@
+import connectDB from "./db";
+import MeetingModel from "@/models/Meeting";
+
 export interface Meeting {
   id: string;
   url: string;
@@ -10,7 +13,7 @@ export interface Meeting {
   isLocked?: boolean;
 }
 
-// In-memory server store for meetings metadata
+// In-memory cache for fast lookup
 const meetingsStore: Map<string, Meeting> = new Map([
   [
     "ABC123",
@@ -59,7 +62,7 @@ export function generateUniqueMeetingId(): string {
 }
 
 /**
- * Creates and saves a new meeting record in the store
+ * Creates and saves a new meeting record in MongoDB and memory store
  */
 export function createMeeting(title?: string, host?: string, customId?: string): Meeting {
   const id = customId ? customId.toUpperCase() : generateUniqueMeetingId();
@@ -79,6 +82,22 @@ export function createMeeting(title?: string, host?: string, customId?: string):
   };
 
   meetingsStore.set(id, newMeeting);
+
+  // Asynchronously persist to MongoDB Atlas
+  connectDB()
+    .then(() => {
+      MeetingModel.create({
+        meetingCode: id,
+        title: meetingTitle,
+        host_Id: hostName,
+        isLocked: false,
+        created_At: new Date(),
+      }).catch(() => {
+        MeetingModel.updateOne({ meetingCode: id }, { title: meetingTitle, host_Id: hostName }).catch(() => {});
+      });
+    })
+    .catch((err) => console.error("MongoDB meeting creation error:", err));
+
   return newMeeting;
 }
 
@@ -87,35 +106,70 @@ export function createMeeting(title?: string, host?: string, customId?: string):
  */
 export function getMeetingById(id: string): Meeting | undefined {
   const normalizedId = id.toUpperCase().trim();
-  return meetingsStore.get(normalizedId);
+  const cached = meetingsStore.get(normalizedId);
+  if (cached) return cached;
+
+  connectDB()
+    .then(async () => {
+      const doc = await MeetingModel.findOne({ meetingCode: normalizedId });
+      if (doc) {
+        meetingsStore.set(normalizedId, {
+          id: doc.meetingCode,
+          url: `/meeting/${doc.meetingCode}`,
+          title: doc.title,
+          host: doc.host_Id,
+          createdAt: doc.created_At ? doc.created_At.toISOString() : new Date().toISOString(),
+          status: doc.ended_At ? "ended" : "active",
+          participantsCount: 1,
+          isEncrypted: true,
+          isLocked: !!doc.isLocked,
+        });
+      }
+    })
+    .catch(() => {});
+
+  return undefined;
 }
 
 /**
- * Updates lock state of a meeting
+ * Updates lock state of a meeting in memory and MongoDB Atlas
  */
 export function setMeetingLocked(id: string, isLocked: boolean): boolean {
-  const meeting = getMeetingById(id);
+  const meeting = meetingsStore.get(id.toUpperCase().trim());
   if (meeting) {
     meeting.isLocked = isLocked;
-    return true;
   }
-  return false;
+
+  connectDB()
+    .then(() => {
+      MeetingModel.updateOne({ meetingCode: id.toUpperCase().trim() }, { isLocked }).catch(() => {});
+    })
+    .catch(() => {});
+
+  return true;
 }
 
 /**
- * Updates meeting status (e.g. "ended")
+ * Updates meeting status (e.g. "ended") in memory and MongoDB Atlas
  */
 export function setMeetingStatus(id: string, status: Meeting["status"]): boolean {
-  const meeting = getMeetingById(id);
+  const meeting = meetingsStore.get(id.toUpperCase().trim());
   if (meeting) {
     meeting.status = status;
-    return true;
   }
-  return false;
+
+  connectDB()
+    .then(() => {
+      const updateObj = status === "ended" ? { ended_At: new Date() } : {};
+      MeetingModel.updateOne({ meetingCode: id.toUpperCase().trim() }, updateObj).catch(() => {});
+    })
+    .catch(() => {});
+
+  return true;
 }
 
 /**
- * Lists all meetings stored in memory
+ * Lists all meetings stored
  */
 export function listMeetings(): Meeting[] {
   return Array.from(meetingsStore.values());

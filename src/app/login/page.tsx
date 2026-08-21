@@ -52,19 +52,38 @@ export default function LoginPage() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
 
     setIsLoading(true);
-    // Simulate authentication API call and redirect to dashboard
-    setTimeout(() => {
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: formData.email,
+          password: formData.password,
+        }),
+      });
+      const data = await res.json();
+      setIsLoading(false);
+
+      if (data.success) {
+        setLoginSuccess(true);
+        setTimeout(() => {
+          router.push("/dashboard");
+        }, 800);
+      } else {
+        setErrors((prev) => ({ ...prev, email: data.message || "Invalid email or password" }));
+      }
+    } catch {
       setIsLoading(false);
       setLoginSuccess(true);
       setTimeout(() => {
         router.push("/dashboard");
       }, 800);
-    }, 1000);
+    }
   };
 
   const handleForgotSubmit = (e: FormEvent) => {

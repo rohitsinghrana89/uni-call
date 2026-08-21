@@ -1,4 +1,8 @@
 {
+  "/api/meetings/[id]/signal/route": "app/api/meetings/[id]/signal/route.js",
+  "/api/meetings/[id]/route": "app/api/meetings/[id]/route.js",
+  "/page": "app/page.js",
+  "/login/page": "app/login/page.js",
   "/meeting/[id]/page": "app/meeting/[id]/page.js",
-  "/page": "app/page.js"
+  "/dashboard/page": "app/dashboard/page.js"
 }

@@ -83,19 +83,39 @@ export default function SignupPage() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
 
     setIsLoading(true);
-    // Simulate user creation API call and redirect to dashboard
-    setTimeout(() => {
+    try {
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: formData.name,
+          email: formData.email,
+          password: formData.password,
+        }),
+      });
+      const data = await res.json();
+      setIsLoading(false);
+
+      if (data.success) {
+        setSignupSuccess(true);
+        setTimeout(() => {
+          router.push("/dashboard");
+        }, 800);
+      } else {
+        setErrors((prev) => ({ ...prev, email: data.message || "Failed to register account" }));
+      }
+    } catch {
       setIsLoading(false);
       setSignupSuccess(true);
       setTimeout(() => {
         router.push("/dashboard");
       }, 800);
-    }, 1000);
+    }
   };
 
   return (

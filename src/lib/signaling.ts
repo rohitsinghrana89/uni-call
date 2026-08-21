@@ -1,4 +1,7 @@
 import { getMeetingById, setMeetingLocked, setMeetingStatus } from "./meetings";
+import connectDB from "./db";
+import ParticipantModel from "@/models/Participant";
+import MessageModel from "@/models/Message";
 
 export interface PeerInfo {
   peerId: string;
@@ -91,6 +94,7 @@ export function verifyHostPermission(roomId: string, requesterPeerId: string): b
 /**
  * Registers or updates a peer in a meeting room.
  * Rejects non-host users if meeting room is locked by the host.
+ * Persists participant records to MongoDB Atlas.
  */
 export function registerPeer(
   roomId: string,
@@ -147,6 +151,17 @@ export function registerPeer(
       timestamp: now,
     };
     room.signals.push(notice);
+
+    // Persist Participant record in MongoDB
+    connectDB()
+      .then(() => {
+        ParticipantModel.create({
+          meeting_Id: roomId.toUpperCase().trim(),
+          user_Id: peerId,
+          joined_At: new Date(),
+        }).catch(() => {});
+      })
+      .catch(() => {});
   }
 
   return { peers: Array.from(room.peers.values()), isLocked: room.isLocked, isEnded: room.isEnded };
@@ -365,7 +380,8 @@ export function hostEndMeeting(
 }
 
 /**
- * Removes a peer from a room when leaving
+ * Removes a peer from a room when leaving.
+ * Updates left_At in MongoDB Participant collection.
  */
 export function unregisterPeer(roomId: string, peerId: string) {
   const normalizedId = roomId.toUpperCase().trim();
@@ -384,6 +400,16 @@ export function unregisterPeer(roomId: string, peerId: string) {
     };
     room.signals.push(notice);
 
+    // Update left_At in MongoDB
+    connectDB()
+      .then(() => {
+        ParticipantModel.updateOne(
+          { meeting_Id: normalizedId, user_Id: peerId, left_At: null },
+          { left_At: new Date() }
+        ).catch(() => {});
+      })
+      .catch(() => {});
+
     if (room.peers.size === 0 && !room.isEnded) {
       rooms.delete(normalizedId);
     }
@@ -391,7 +417,8 @@ export function unregisterPeer(roomId: string, peerId: string) {
 }
 
 /**
- * Queues an SDP offer/answer or ICE candidate signal
+ * Queues an SDP offer/answer or ICE candidate signal.
+ * Persists chat messages to MongoDB Message collection.
  */
 export function postSignalMessage(
   roomId: string,
@@ -413,6 +440,21 @@ export function postSignalMessage(
   };
 
   room.signals.push(msg);
+
+  // If signal contains chat text, save to MongoDB Message collection
+  if (payload && (payload.message || payload.text)) {
+    const textMsg = payload.message || payload.text;
+    connectDB()
+      .then(() => {
+        MessageModel.create({
+          meeting_Id: roomId.toUpperCase().trim(),
+          sender_Id: fromPeerId,
+          message: String(textMsg),
+          created_At: new Date(),
+        }).catch(() => {});
+      })
+      .catch(() => {});
+  }
 }
 
 /**
