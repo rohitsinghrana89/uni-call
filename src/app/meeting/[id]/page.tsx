@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, use, FormEvent } from "react";
+import { useState, useEffect, useRef, use, FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -15,7 +15,6 @@ import {
   ArrowLeft,
   Share2,
   Users,
-  Play,
   Clock,
   PhoneOff,
   User,
@@ -28,10 +27,9 @@ import {
   MonitorOff,
   Send,
   X,
-  Maximize2,
-  Grid,
-  MoreVertical,
-  Radio
+  RefreshCw,
+  Camera,
+  Play
 } from "lucide-react";
 
 interface MeetingData {
@@ -46,7 +44,7 @@ interface MeetingData {
   isEncrypted: boolean;
 }
 
-// Mock Call Participants Data
+// Mock Call Participants Data for grid demonstration
 const CALL_PARTICIPANTS = [
   {
     id: "p-1",
@@ -100,21 +98,14 @@ const INITIAL_CHAT = [
     id: "c-1",
     sender: "Sarah Jenkins",
     time: "4:02 PM",
-    text: "Welcome everyone! Let's review the Q3 product roadmap & architecture.",
+    text: "Welcome everyone! WebRTC Real Browser Media Access is live.",
     isSelf: false,
   },
   {
     id: "c-2",
     sender: "David Chen",
     time: "4:03 PM",
-    text: "The E2EE 256-bit audio pipeline specs are ready for presentation.",
-    isSelf: false,
-  },
-  {
-    id: "c-3",
-    sender: "Emily Watson",
-    time: "4:04 PM",
-    text: "UI design tokens and glassmorphism components look stunning!",
+    text: "Testing local video preview and mic mute toggles.",
     isSelf: false,
   },
 ];
@@ -127,17 +118,26 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
   const [meeting, setMeeting] = useState<MeetingData | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Pre-join Lobby Form & Media States
+  // Pre-join Lobby Form & User States
   const [displayName, setDisplayName] = useState("Alex Morgan");
   const [nameError, setNameError] = useState("");
-  const [micEnabled, setMicEnabled] = useState(true);
-  const [camEnabled, setCamEnabled] = useState(true);
-  const [screenSharing, setScreenSharing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [hasJoined, setHasJoined] = useState(false);
   const [originUrl, setOriginUrl] = useState("");
 
-  // In-Call Drawers
+  // WebRTC Real Browser Media Access States
+  const [micEnabled, setMicEnabled] = useState(true);
+  const [camEnabled, setCamEnabled] = useState(true);
+  const [mediaError, setMediaError] = useState<string | null>(null);
+  const [isInitializingMedia, setIsInitializingMedia] = useState(false);
+
+  // Video element refs for live WebRTC stream binding
+  const lobbyVideoRef = useRef<HTMLVideoElement | null>(null);
+  const roomVideoRef = useRef<HTMLVideoElement | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+
+  // In-Call Drawers & Controls
+  const [screenSharing, setScreenSharing] = useState(false);
   const [showChatSidebar, setShowChatSidebar] = useState(false);
   const [showParticipantsSidebar, setShowParticipantsSidebar] = useState(false);
   const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
@@ -147,8 +147,89 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
   const [newMessageText, setNewMessageText] = useState("");
 
   // Timer State
-  const [callSeconds, setCallSeconds] = useState(254); // starts at 4m 14s
+  const [callSeconds, setCallSeconds] = useState(254);
 
+  // Initialize WebRTC Real Media Stream
+  const initMediaStream = async () => {
+    setIsInitializingMedia(true);
+    setMediaError(null);
+
+    // Stop existing stream tracks if re-initializing
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
+    }
+
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("WebRTC media devices API is not supported in this browser environment.");
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: "user",
+        },
+        audio: true,
+      });
+
+      localStreamRef.current = stream;
+
+      // Apply initial mic & camera mute states
+      stream.getVideoTracks().forEach((track) => {
+        track.enabled = camEnabled;
+      });
+      stream.getAudioTracks().forEach((track) => {
+        track.enabled = micEnabled;
+      });
+
+      // Bind stream to video elements
+      if (lobbyVideoRef.current) {
+        lobbyVideoRef.current.srcObject = stream;
+      }
+      if (roomVideoRef.current) {
+        roomVideoRef.current.srcObject = stream;
+      }
+    } catch (err: unknown) {
+      console.error("WebRTC getUserMedia Error:", err);
+      const errorObj = err as { name?: string; message?: string };
+      
+      if (errorObj.name === "NotAllowedError" || errorObj.name === "PermissionDeniedError") {
+        setMediaError(
+          "Camera and Microphone permissions were denied by your browser. Please click the lock or camera icon in your address bar to grant permissions and click 'Retry Permission'."
+        );
+      } else if (errorObj.name === "NotFoundError" || errorObj.name === "DevicesNotFoundError") {
+        setMediaError(
+          "No camera or microphone device was found on your computer. Please connect a webcam/mic and try again."
+        );
+      } else if (errorObj.name === "NotReadableError" || errorObj.name === "TrackStartError") {
+        setMediaError(
+          "Your camera or microphone is currently in use by another application (such as Zoom, Teams, or Skype)."
+        );
+      } else {
+        setMediaError(errorObj.message || "Failed to access browser camera and microphone.");
+      }
+    } finally {
+      setIsInitializingMedia(false);
+    }
+  };
+
+  // Stop WebRTC Tracks Cleanup
+  const stopMediaStream = () => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
+    }
+    if (lobbyVideoRef.current) {
+      lobbyVideoRef.current.srcObject = null;
+    }
+    if (roomVideoRef.current) {
+      roomVideoRef.current.srcObject = null;
+    }
+  };
+
+  // Mount Effect: Fetch Meeting & Request WebRTC Stream
   useEffect(() => {
     if (typeof window !== "undefined") {
       setOriginUrl(window.location.origin);
@@ -191,7 +272,22 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
     }
 
     fetchMeeting();
+    initMediaStream();
+
+    // Cleanup on unmount or tab close
+    return () => {
+      stopMediaStream();
+    };
   }, [meetingId]);
+
+  // Re-bind video element when switching to in-call view
+  useEffect(() => {
+    if (hasJoined && localStreamRef.current && roomVideoRef.current) {
+      roomVideoRef.current.srcObject = localStreamRef.current;
+    } else if (!hasJoined && localStreamRef.current && lobbyVideoRef.current) {
+      lobbyVideoRef.current.srcObject = localStreamRef.current;
+    }
+  }, [hasJoined]);
 
   // In-Call Timer Interval
   useEffect(() => {
@@ -201,6 +297,28 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
     }, 1000);
     return () => clearInterval(interval);
   }, [hasJoined]);
+
+  // Toggle Camera Track
+  const toggleCamera = () => {
+    const nextState = !camEnabled;
+    setCamEnabled(nextState);
+    if (localStreamRef.current) {
+      localStreamRef.current.getVideoTracks().forEach((track) => {
+        track.enabled = nextState;
+      });
+    }
+  };
+
+  // Toggle Microphone Track
+  const toggleMicrophone = () => {
+    const nextState = !micEnabled;
+    setMicEnabled(nextState);
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = nextState;
+      });
+    }
+  };
 
   const formatTimer = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -227,6 +345,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
   };
 
   const handleLeaveCall = () => {
+    stopMediaStream();
     setHasJoined(false);
     router.push("/dashboard");
   };
@@ -252,7 +371,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
       <div className="min-h-screen bg-[#080B11] text-slate-100 flex items-center justify-center bg-grid-pattern">
         <div className="flex flex-col items-center gap-3">
           <div className="w-10 h-10 border-4 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin" />
-          <p className="text-xs text-slate-400 font-medium">Securing 4K HD Video Conference Room...</p>
+          <p className="text-xs text-slate-400 font-medium">Securing WebRTC Meeting Room...</p>
         </div>
       </div>
     );
@@ -265,7 +384,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
       <div className="fixed top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[450px] bg-blue-600/15 rounded-full blur-[150px] pointer-events-none z-0" />
       <div className="fixed bottom-10 right-10 w-[400px] h-[300px] bg-cyan-500/10 rounded-full blur-[130px] pointer-events-none z-0" />
 
-      {/* Top Header Bar */}
+      {/* Header Bar */}
       <header className="relative z-20 w-full px-4 sm:px-6 py-4 glass-panel border-b border-slate-800/80 bg-[#080B11]/90 backdrop-blur-md flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Link href="/dashboard" className="flex items-center gap-2.5 group">
@@ -298,11 +417,12 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
 
           <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold">
             <ShieldCheck className="w-4 h-4" />
-            <span>E2EE Active</span>
+            <span>WebRTC Encrypted</span>
           </div>
 
           <Link
             href="/dashboard"
+            onClick={stopMediaStream}
             className="glass-pill px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-300 hover:text-white border border-slate-700/60 hover:border-slate-500/80 transition-all flex items-center gap-1.5"
           >
             <ArrowLeft className="w-3.5 h-3.5 text-cyan-400" />
@@ -311,7 +431,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
         </div>
       </header>
 
-      {/* Main Content View */}
+      {/* Main Content Area */}
       <main className="relative z-10 flex-grow flex flex-col items-center justify-center p-3 sm:p-6 w-full max-w-7xl mx-auto">
         {hasJoined ? (
           /* Active Call Meeting Room View */
@@ -325,17 +445,16 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                 <div className="relative aspect-video w-full rounded-3xl bg-slate-950 border-2 border-cyan-500/80 overflow-hidden shadow-glow-cyan flex flex-col items-center justify-center">
                   <div className="absolute top-4 left-4 glass-pill px-3 py-1.5 rounded-xl text-xs font-bold text-cyan-400 flex items-center gap-2 border border-cyan-500/30">
                     <Monitor className="w-4 h-4 text-cyan-400 animate-pulse" />
-                    <span>Alex Morgan is Sharing Screen (4K Presentation)</span>
+                    <span>{displayName} is Sharing Screen (4K Presentation)</span>
                   </div>
                   
-                  {/* Mock Screen Content */}
                   <div className="p-8 text-center space-y-3">
                     <div className="w-16 h-16 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 mx-auto flex items-center justify-center text-cyan-400">
                       <Monitor className="w-8 h-8" />
                     </div>
-                    <h3 className="text-xl font-bold text-white">Q3 Architecture & E2EE Audio Pipeline Specs</h3>
+                    <h3 className="text-xl font-bold text-white">Q3 Architecture & WebRTC Audio Pipeline Specs</h3>
                     <p className="text-xs text-slate-400 max-w-md mx-auto">
-                      Real-time screen presentation stream active. High-bandwidth 60FPS spatial video preview.
+                      Real-time desktop presentation stream active.
                     </p>
                   </div>
                 </div>
@@ -348,36 +467,40 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                   : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
               }`}>
                 
-                {/* 1. Current User Video Card */}
+                {/* 1. Real Local WebRTC Camera Video Tile */}
                 <div className={`relative aspect-video rounded-3xl bg-slate-950 border transition-all overflow-hidden flex flex-col items-center justify-center shadow-2xl group ${
                   pinnedParticipantId === "self" ? "border-cyan-400 ring-2 ring-cyan-500/30" : "border-slate-800"
                 }`}>
-                  {camEnabled ? (
-                    <div className="absolute inset-0 bg-gradient-to-tr from-slate-900 via-slate-950 to-cyan-950/40 flex flex-col items-center justify-center p-4 text-center">
-                      <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-violet-600 to-cyan-500 flex items-center justify-center font-bold text-2xl text-white shadow-glow mb-2">
+                  {/* Real WebRTC Video Tag */}
+                  <video
+                    ref={roomVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={`w-full h-full object-cover transition-opacity duration-300 ${
+                      camEnabled ? "opacity-100" : "opacity-0 absolute"
+                    }`}
+                  />
+
+                  {/* Fallback Avatar when Camera is Off */}
+                  {!camEnabled && (
+                    <div className="flex flex-col items-center justify-center text-slate-500 space-y-2">
+                      <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-violet-600 to-cyan-500 flex items-center justify-center font-bold text-xl text-white shadow-glow">
                         {displayName.trim() ? displayName.trim().slice(0, 2).toUpperCase() : "YOU"}
                       </div>
-                      <h3 className="text-sm font-bold text-white">{displayName} (You)</h3>
-                      <span className="text-[10px] text-cyan-400 font-semibold mt-0.5 flex items-center gap-1">
-                        <Sparkles className="w-3 h-3" /> Camera Stream Active
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center text-slate-500 space-y-1">
-                      <VideoOff className="w-10 h-10 text-slate-600" />
-                      <p className="text-xs font-medium">Camera Turned Off</p>
+                      <p className="text-xs font-semibold text-slate-400">Camera Off</p>
                     </div>
                   )}
 
-                  {/* Overlays */}
-                  <div className="absolute bottom-3 left-3 glass-pill px-3 py-1 rounded-xl text-xs font-semibold text-white flex items-center gap-2 border border-white/10">
+                  {/* Tile Overlays */}
+                  <div className="absolute bottom-3 left-3 glass-pill px-3 py-1 rounded-xl text-xs font-semibold text-white flex items-center gap-2 border border-white/10 z-20">
                     {micEnabled ? <Mic className="w-3.5 h-3.5 text-emerald-400" /> : <MicOff className="w-3.5 h-3.5 text-rose-400" />}
                     <span>{displayName} (You)</span>
                   </div>
 
                   <button
                     onClick={() => setPinnedParticipantId(pinnedParticipantId === "self" ? null : "self")}
-                    className="absolute top-3 right-3 p-2 rounded-xl glass-pill text-slate-400 hover:text-white border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity"
+                    className="absolute top-3 right-3 p-2 rounded-xl glass-pill text-slate-400 hover:text-white border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity z-20"
                     title="Pin Video"
                   >
                     <Pin className={`w-3.5 h-3.5 ${pinnedParticipantId === "self" ? "text-cyan-400 fill-current" : ""}`} />
@@ -397,7 +520,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                     ) : null}
 
                     <div className="relative z-10 flex flex-col items-center justify-center p-4 text-center">
-                      <div className={`w-20 h-20 rounded-full bg-gradient-to-tr ${participant.gradient} flex items-center justify-center font-bold text-2xl text-white shadow-glow mb-2 ${
+                      <div className={`w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-gradient-to-tr ${participant.gradient} flex items-center justify-center font-bold text-xl sm:text-2xl text-white shadow-glow mb-2 ${
                         participant.isSpeaking ? "scale-105 transition-transform" : ""
                       }`}>
                         {participant.initials}
@@ -413,7 +536,6 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                       <p className="text-[10px] text-slate-400 font-medium">{participant.role}</p>
                     </div>
 
-                    {/* Participant Info Overlay */}
                     <div className="absolute bottom-3 left-3 glass-pill px-3 py-1 rounded-xl text-xs font-semibold text-white flex items-center gap-2 border border-white/10 z-20">
                       {participant.micOn ? (
                         <span className="flex items-center gap-1 text-emerald-400">
@@ -426,7 +548,6 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                       <span>{participant.name}</span>
                     </div>
 
-                    {/* Pin Action */}
                     <button
                       onClick={() => setPinnedParticipantId(pinnedParticipantId === participant.id ? null : participant.id)}
                       className="absolute top-3 right-3 p-2 rounded-xl glass-pill text-slate-400 hover:text-white border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity z-20"
@@ -478,7 +599,6 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                   </div>
                 </div>
 
-                {/* Send Input */}
                 <form onSubmit={handleSendMessage} className="pt-3 border-t border-slate-800 flex items-center gap-2">
                   <input
                     type="text"
@@ -516,7 +636,6 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
 
                   {/* Roster List */}
                   <div className="space-y-2 py-4 max-h-[400px] overflow-y-auto">
-                    {/* Self */}
                     <div className="p-3 rounded-2xl bg-slate-900/90 border border-slate-800/80 flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-violet-600 to-cyan-500 flex items-center justify-center text-white text-xs font-bold">
@@ -524,13 +643,12 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                         </div>
                         <div>
                           <p className="text-xs font-bold text-white">{displayName} (You)</p>
-                          <p className="text-[10px] text-cyan-400 font-medium">Participant</p>
+                          <p className="text-[10px] text-cyan-400 font-medium">WebRTC Live</p>
                         </div>
                       </div>
                       {micEnabled ? <Mic className="w-4 h-4 text-emerald-400" /> : <MicOff className="w-4 h-4 text-rose-400" />}
                     </div>
 
-                    {/* Team */}
                     {CALL_PARTICIPANTS.map((p) => (
                       <div key={p.id} className="p-3 rounded-2xl bg-slate-900/60 border border-slate-800/60 flex items-center justify-between">
                         <div className="flex items-center gap-3">
@@ -563,36 +681,64 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
           /* Pre-Join Lobby View */
           <div className="w-full max-w-4xl grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
             
-            {/* Left Column: Camera Preview Box & Media Toggles */}
+            {/* Left Column: Real WebRTC Camera Preview Box & Media Toggles */}
             <div className="lg:col-span-7 space-y-4">
+              
+              {/* Permission Error Banner */}
+              {mediaError && (
+                <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs space-y-2 animate-in fade-in">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-5 h-5 text-rose-400 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-rose-200">Media Permission Required</p>
+                      <p className="text-rose-300/90 leading-relaxed mt-1">{mediaError}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={initMediaStream}
+                    disabled={isInitializingMedia}
+                    className="mt-2 px-3.5 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 font-semibold text-xs border border-rose-500/40 flex items-center gap-1.5 transition-all"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isInitializingMedia ? "animate-spin" : ""}`} />
+                    <span>Retry Permission</span>
+                  </button>
+                </div>
+              )}
+
               <div className="relative aspect-video w-full rounded-3xl bg-slate-950 border border-slate-800 overflow-hidden shadow-2xl flex flex-col items-center justify-center">
                 
-                {camEnabled ? (
-                  <div className="absolute inset-0 bg-gradient-to-tr from-slate-900 via-slate-950 to-blue-950/40 flex flex-col items-center justify-center p-6 text-center">
-                    <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center font-bold text-3xl text-white shadow-glow mb-3">
+                {/* Real WebRTC Video Tag */}
+                <video
+                  ref={lobbyVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className={`w-full h-full object-cover transition-opacity duration-300 ${
+                    camEnabled && !mediaError ? "opacity-100" : "opacity-0 absolute"
+                  }`}
+                />
+
+                {/* Fallback Placeholder when Camera Off or Error */}
+                {(!camEnabled || mediaError) && (
+                  <div className="flex flex-col items-center justify-center text-slate-500 space-y-2 p-6 text-center">
+                    <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center font-bold text-2xl text-white shadow-glow">
                       {displayName.trim() ? displayName.trim().slice(0, 2).toUpperCase() : "ME"}
                     </div>
-                    <h3 className="text-lg font-bold text-white">{displayName || "Your Name"}</h3>
-                    <p className="text-xs text-cyan-400 font-medium mt-1 flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5" /> Camera Stream Ready (4K HD)
+                    <p className="text-sm font-semibold text-slate-400">
+                      {mediaError ? "Camera Access Disabled" : "Camera is turned off"}
                     </p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center justify-center text-slate-500 space-y-2">
-                    <VideoOff className="w-14 h-14 text-slate-600" />
-                    <p className="text-sm font-semibold text-slate-400">Camera is turned off</p>
                   </div>
                 )}
 
                 {/* Floating Live Status Bar */}
-                <div className="absolute top-4 left-4 right-4 flex items-center justify-between pointer-events-none">
+                <div className="absolute top-4 left-4 right-4 flex items-center justify-between pointer-events-none z-20">
                   <div className="glass-pill px-3 py-1.5 rounded-xl text-xs font-semibold text-white flex items-center gap-2 border border-white/10">
-                    <span className={`w-2.5 h-2.5 rounded-full ${camEnabled ? "bg-emerald-400 animate-pulse" : "bg-slate-500"}`} />
-                    <span>{camEnabled ? "Camera Active" : "Camera Off"}</span>
+                    <span className={`w-2.5 h-2.5 rounded-full ${camEnabled && !mediaError ? "bg-emerald-400 animate-pulse" : "bg-slate-500"}`} />
+                    <span>{camEnabled && !mediaError ? "WebRTC Camera Active" : "Camera Off"}</span>
                   </div>
 
                   <div className="glass-pill px-3 py-1.5 rounded-xl text-xs font-semibold text-white flex items-center gap-2 border border-white/10">
-                    {micEnabled ? (
+                    {micEnabled && !mediaError ? (
                       <>
                         <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
                         <span className="text-emerald-400">Microphone Active</span>
@@ -607,10 +753,10 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                 </div>
 
                 {/* Pre-join Audio/Video Toggle Overlays */}
-                <div className="absolute bottom-5 inset-x-0 flex items-center justify-center gap-4">
+                <div className="absolute bottom-5 inset-x-0 flex items-center justify-center gap-4 z-20">
                   <button
                     type="button"
-                    onClick={() => setMicEnabled(!micEnabled)}
+                    onClick={toggleMicrophone}
                     className={`p-3.5 rounded-2xl border backdrop-blur-md transition-all shadow-lg ${
                       micEnabled
                         ? "bg-slate-900/90 border-slate-700 text-white hover:bg-slate-800"
@@ -623,7 +769,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
 
                   <button
                     type="button"
-                    onClick={() => setCamEnabled(!camEnabled)}
+                    onClick={toggleCamera}
                     className={`p-3.5 rounded-2xl border backdrop-blur-md transition-all shadow-lg ${
                       camEnabled
                         ? "bg-slate-900/90 border-slate-700 text-white hover:bg-slate-800"
@@ -641,7 +787,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
               <div className="p-3.5 rounded-2xl glass-panel border border-slate-800/90 flex items-center justify-between text-xs">
                 <span className="text-slate-400 flex items-center gap-2 font-medium">
                   {micEnabled ? <Mic className="w-3.5 h-3.5 text-emerald-400" /> : <MicOff className="w-3.5 h-3.5 text-rose-400" />}
-                  Microphone Input Level:
+                  WebRTC Audio Track Status:
                 </span>
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-0.5 h-3 w-16">
@@ -651,7 +797,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                     <span className={`w-1.5 rounded-full transition-all ${micEnabled ? "h-3.5 bg-cyan-400" : "h-1 bg-slate-700"}`} />
                   </div>
                   <span className={`font-semibold ${micEnabled ? "text-emerald-400" : "text-slate-500"}`}>
-                    {micEnabled ? "Ready" : "Muted"}
+                    {micEnabled ? "Live" : "Muted"}
                   </span>
                 </div>
               </div>
@@ -765,7 +911,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
             <div className="flex items-center gap-2 sm:gap-4 mx-auto md:mx-0">
               {/* Microphone Button */}
               <button
-                onClick={() => setMicEnabled(!micEnabled)}
+                onClick={toggleMicrophone}
                 className={`p-3 sm:p-3.5 rounded-2xl border transition-all flex items-center justify-center ${
                   micEnabled
                     ? "bg-slate-800 border-slate-700 text-white hover:bg-slate-700"
@@ -778,7 +924,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
 
               {/* Camera Button */}
               <button
-                onClick={() => setCamEnabled(!camEnabled)}
+                onClick={toggleCamera}
                 className={`p-3 sm:p-3.5 rounded-2xl border transition-all flex items-center justify-center ${
                   camEnabled
                     ? "bg-slate-800 border-slate-700 text-white hover:bg-slate-700"
@@ -867,7 +1013,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
       {/* Pre-Join Footer Disclaimer */}
       {!hasJoined && (
         <footer className="relative z-10 py-6 text-center text-xs text-slate-500">
-          &copy; {new Date().getFullYear()} UniCall Inc. Enterprise-grade 256-Bit SSL/TLS Encryption.
+          &copy; {new Date().getFullYear()} UniCall Inc. WebRTC Media Stream Standard.
         </footer>
       )}
     </div>

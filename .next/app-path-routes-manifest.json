@@ -3,8 +3,8 @@
   "/api/meetings/route": "/api/meetings",
   "/api/meetings/[id]/route": "/api/meetings/[id]",
   "/dashboard/page": "/dashboard",
-  "/meeting/[id]/page": "/meeting/[id]",
-  "/login/page": "/login",
   "/signup/page": "/signup",
-  "/page": "/"
+  "/login/page": "/login",
+  "/page": "/",
+  "/meeting/[id]/page": "/meeting/[id]"
 }
