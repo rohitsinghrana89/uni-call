@@ -167,10 +167,16 @@ export default function DashboardPage() {
 
   // New Instant Meeting Modal state
   const [showNewMeetingModal, setShowNewMeetingModal] = useState(false);
+  const [isCreatingMeeting, setIsCreatingMeeting] = useState(false);
   const [micEnabled, setMicEnabled] = useState(true);
   const [camEnabled, setCamEnabled] = useState(true);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [generatedRoomCode] = useState("unicall.app/meet/unicall-hd-8921");
+  const [createdMeeting, setCreatedMeeting] = useState<{
+    id: string;
+    url: string;
+    fullUrl: string;
+    title: string;
+  } | null>(null);
 
   // Schedule Modal state
   const [showScheduleModal, setShowScheduleModal] = useState(false);
@@ -189,6 +195,39 @@ export default function DashboardPage() {
     m.host.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const handleCreateMeeting = async () => {
+    try {
+      setIsCreatingMeeting(true);
+      const res = await fetch("/api/meetings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Instant HD Meeting",
+          host: "Alex Morgan",
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success && data.meeting) {
+        const fullUrl = data.meeting.fullUrl || `${window.location.origin}/meeting/${data.meeting.id}`;
+        setCreatedMeeting({
+          id: data.meeting.id,
+          url: data.meeting.url,
+          fullUrl,
+          title: data.meeting.title,
+        });
+        setShowNewMeetingModal(true);
+      } else {
+        alert("Failed to create meeting room.");
+      }
+    } catch (err) {
+      console.error("Meeting creation error", err);
+      alert("Error connecting to meeting service.");
+    } finally {
+      setIsCreatingMeeting(false);
+    }
+  };
+
   const handleJoinMeeting = (e: React.FormEvent) => {
     e.preventDefault();
     if (!joinCode.trim()) {
@@ -197,11 +236,16 @@ export default function DashboardPage() {
     }
     setJoinError("");
     setIsJoining(true);
+
+    let code = joinCode.trim();
+    if (code.includes("/meeting/")) {
+      code = code.split("/meeting/").pop() || code;
+    }
+
     setTimeout(() => {
       setIsJoining(false);
-      alert(`Joining meeting room: ${joinCode.trim()} with 4K HD Video and Spatial Audio!`);
-      setJoinCode("");
-    }, 1000);
+      router.push(`/meeting/${code.toUpperCase()}`);
+    }, 600);
   };
 
   const handleCopyMeetingLink = (link: string) => {
@@ -484,12 +528,19 @@ export default function DashboardPage() {
                 </div>
 
                 <button
-                  onClick={() => setShowNewMeetingModal(true)}
-                  className="w-full py-4 px-6 rounded-2xl font-bold text-white bg-gradient-primary shadow-glow hover:shadow-glow-cyan transition-all duration-300 active:scale-[0.98] flex items-center justify-center gap-2 text-sm group"
+                  onClick={handleCreateMeeting}
+                  disabled={isCreatingMeeting}
+                  className="w-full py-4 px-6 rounded-2xl font-bold text-white bg-gradient-primary shadow-glow hover:shadow-glow-cyan transition-all duration-300 active:scale-[0.98] flex items-center justify-center gap-2 text-sm group disabled:opacity-70"
                 >
-                  <Plus className="w-5 h-5 stroke-[2.5]" />
-                  <span>New Instant Meeting</span>
-                  <ArrowRight className="w-4 h-4 text-white/80 group-hover:translate-x-1 transition-transform ml-auto" />
+                  {isCreatingMeeting ? (
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <Plus className="w-5 h-5 stroke-[2.5]" />
+                      <span>New Instant Meeting</span>
+                      <ArrowRight className="w-4 h-4 text-white/80 group-hover:translate-x-1 transition-transform ml-auto" />
+                    </>
+                  )}
                 </button>
               </div>
 
@@ -882,23 +933,32 @@ export default function DashboardPage() {
                 <Video className="w-6 h-6 text-white" />
               </div>
               <h3 className="text-xl font-bold text-white">Your Instant Meeting is Ready</h3>
-              <p className="text-xs text-slate-400">Share this secure link to invite participants</p>
+              <p className="text-xs text-slate-400">Share this unique link to invite participants</p>
             </div>
 
-            {/* Link Box */}
-            <div className="p-3.5 bg-slate-900 border border-slate-800 rounded-2xl flex items-center justify-between gap-2">
-              <span className="text-xs text-cyan-300 font-mono truncate">{generatedRoomCode}</span>
-              <button
-                onClick={() => handleCopyMeetingLink(generatedRoomCode)}
-                className="px-3 py-1.5 rounded-xl bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 text-xs font-semibold flex items-center gap-1 border border-cyan-500/20"
-              >
-                {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                {copiedLink ? "Copied" : "Copy"}
-              </button>
-            </div>
+            {/* Meeting Info Summary */}
+            {createdMeeting && (
+              <div className="space-y-3">
+                <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-2xl flex items-center justify-between text-xs">
+                  <span className="text-slate-400 font-semibold">Meeting ID:</span>
+                  <span className="font-mono font-bold text-cyan-400 text-sm tracking-wider">{createdMeeting.id}</span>
+                </div>
+
+                <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-2xl flex items-center justify-between gap-2">
+                  <span className="text-xs text-slate-200 font-mono truncate">{createdMeeting.fullUrl}</span>
+                  <button
+                    onClick={() => handleCopyMeetingLink(createdMeeting.fullUrl)}
+                    className="px-3 py-1.5 rounded-xl bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 text-xs font-semibold flex items-center gap-1 border border-cyan-500/20 flex-shrink-0"
+                  >
+                    {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedLink ? "Copied" : "Copy Link"}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Quick Audio/Video Toggle */}
-            <div className="flex items-center justify-center gap-4 py-2">
+            <div className="flex items-center justify-center gap-4 py-1">
               <button
                 onClick={() => setMicEnabled(!micEnabled)}
                 className={`p-3.5 rounded-2xl border transition-all ${
@@ -919,16 +979,28 @@ export default function DashboardPage() {
               </button>
             </div>
 
-            <button
-              onClick={() => {
-                alert(`Starting HD Video Meeting Room: ${generatedRoomCode}`);
-                setShowNewMeetingModal(false);
-              }}
-              className="w-full py-3.5 rounded-2xl font-bold text-white bg-gradient-primary shadow-glow hover:shadow-glow-cyan text-sm flex items-center justify-center gap-2"
-            >
-              <Play className="w-4 h-4 fill-current" />
-              <span>Start Meeting Now</span>
-            </button>
+            <div className="space-y-2">
+              <button
+                onClick={() => {
+                  if (createdMeeting) {
+                    setShowNewMeetingModal(false);
+                    router.push(createdMeeting.url);
+                  }
+                }}
+                className="w-full py-3.5 rounded-2xl font-bold text-white bg-gradient-primary shadow-glow hover:shadow-glow-cyan text-sm flex items-center justify-center gap-2"
+              >
+                <Play className="w-4 h-4 fill-current" />
+                <span>Start Meeting</span>
+              </button>
+
+              <button
+                onClick={() => createdMeeting && handleCopyMeetingLink(createdMeeting.fullUrl)}
+                className="w-full py-2.5 rounded-2xl glass-pill hover:bg-slate-800/80 border border-slate-700/80 text-xs font-semibold text-slate-300 hover:text-white transition-all flex items-center justify-center gap-1.5"
+              >
+                {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-cyan-400" />}
+                <span>{copiedLink ? "Meeting Link Copied!" : "Copy Link"}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

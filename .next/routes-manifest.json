@@ -18,7 +18,24 @@
     "afterFiles": [],
     "fallback": []
   },
-  "dynamicRoutes": [],
+  "dynamicRoutes": [
+    {
+      "page": "/api/meetings/[id]",
+      "regex": "^/api/meetings/([^/]+?)(?:/)?$",
+      "routeKeys": {
+        "nxtPid": "nxtPid"
+      },
+      "namedRegex": "^/api/meetings/(?<nxtPid>[^/]+?)(?:/)?$"
+    },
+    {
+      "page": "/meeting/[id]",
+      "regex": "^/meeting/([^/]+?)(?:/)?$",
+      "routeKeys": {
+        "nxtPid": "nxtPid"
+      },
+      "namedRegex": "^/meeting/(?<nxtPid>[^/]+?)(?:/)?$"
+    }
+  ],
   "staticRoutes": [
     {
       "page": "/",
