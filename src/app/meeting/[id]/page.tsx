@@ -30,7 +30,13 @@ import {
   RefreshCw,
   Play,
   Crown,
-  Search
+  Search,
+  Lock,
+  LockOpen,
+  UserX,
+  ShieldAlert,
+  OctagonAlert,
+  Power
 } from "lucide-react";
 
 interface MeetingData {
@@ -105,6 +111,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
   const [showChatSidebar, setShowChatSidebar] = useState(false);
   const [showParticipantsSidebar, setShowParticipantsSidebar] = useState(false);
   const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
+  const [participantSearch, setParticipantSearch] = useState("");
 
   // Chat State
   const [chatMessages, setChatMessages] = useState(INITIAL_CHAT);
@@ -112,6 +119,132 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
 
   // Call Timer
   const [callSeconds, setCallSeconds] = useState(0);
+
+  // Host Controls & Room Lock States
+  const [isRoomLocked, setIsRoomLocked] = useState(false);
+  const [hostNotice, setHostNotice] = useState<string | null>(null);
+
+  const isSelfHost = meeting?.host
+    ? displayName.trim().toLowerCase() === meeting.host.trim().toLowerCase() || meeting.host === "Host"
+    : false;
+
+  // Host Control Action: Mute a target participant
+  const handleHostMute = async (targetPeerId: string) => {
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/signal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "host-mute",
+          peerId: myPeerId,
+          targetPeerId,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setHostNotice(data.message || "Unauthorized: Only meeting host can mute participants.");
+        setTimeout(() => setHostNotice(null), 4500);
+      }
+    } catch (err) {
+      console.error("Host mute error:", err);
+    }
+  };
+
+  // Host Control Action: Stop target participant's screen share
+  const handleHostStopShare = async (targetPeerId: string) => {
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/signal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "host-stop-share",
+          peerId: myPeerId,
+          targetPeerId,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setHostNotice(data.message || "Unauthorized: Only meeting host can stop screen sharing.");
+        setTimeout(() => setHostNotice(null), 4500);
+      }
+    } catch (err) {
+      console.error("Host stop share error:", err);
+    }
+  };
+
+  // Host Control Action: Remove target participant
+  const handleHostRemove = async (targetPeerId: string) => {
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/signal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "host-remove",
+          peerId: myPeerId,
+          targetPeerId,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setHostNotice(data.message || "Unauthorized: Only meeting host can remove participants.");
+        setTimeout(() => setHostNotice(null), 4500);
+      }
+    } catch (err) {
+      console.error("Host remove error:", err);
+    }
+  };
+
+  // Host Control Action: Toggle Room Lock
+  const handleHostToggleLock = async () => {
+    try {
+      const nextLocked = !isRoomLocked;
+      const res = await fetch(`/api/meetings/${meetingId}/signal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "host-toggle-lock",
+          peerId: myPeerId,
+          isLocked: nextLocked,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsRoomLocked(nextLocked);
+        setHostNotice(nextLocked ? "Meeting is now locked. New participants cannot join." : "Meeting is now unlocked.");
+        setTimeout(() => setHostNotice(null), 4500);
+      } else {
+        setHostNotice(data.message || "Unauthorized: Only meeting host can lock or unlock the room.");
+        setTimeout(() => setHostNotice(null), 4500);
+      }
+    } catch (err) {
+      console.error("Host toggle lock error:", err);
+    }
+  };
+
+  // Host Control Action: End Meeting for All
+  const handleHostEndMeeting = async () => {
+    if (!confirm("Are you sure you want to end the meeting for all participants?")) return;
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/signal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "host-end-meeting",
+          peerId: myPeerId,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        stopMediaStream();
+        router.push("/dashboard");
+      } else {
+        setHostNotice(data.message || "Unauthorized: Only meeting host can end the meeting.");
+        setTimeout(() => setHostNotice(null), 4500);
+      }
+    } catch (err) {
+      console.error("Host end meeting error:", err);
+    }
+  };
 
   // WebRTC Configuration (Google STUN)
   const rtcConfig: RTCConfiguration = {
@@ -478,6 +611,17 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
           lastSignalTimeRef.current = data.serverTime;
         }
 
+        if (data.isLocked !== undefined) {
+          setIsRoomLocked(data.isLocked);
+        }
+
+        if (data.isEnded) {
+          stopMediaStream();
+          alert("The meeting has been ended by the host.");
+          router.push("/dashboard");
+          return;
+        }
+
         if (data.peers) {
           setRemotePeers((prev) => {
             const next = new Map();
@@ -540,6 +684,33 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                 }
                 return next;
               });
+            } else if (type === "force-mute" && payload?.targetPeerId === myPeerId) {
+              setMicEnabled(false);
+              if (localStreamRef.current) {
+                localStreamRef.current.getAudioTracks().forEach((track) => {
+                  track.enabled = false;
+                });
+              }
+              setHostNotice("The meeting host muted your microphone.");
+              setTimeout(() => setHostNotice(null), 5000);
+            } else if (type === "force-stop-share" && payload?.targetPeerId === myPeerId) {
+              stopScreenSharing();
+              setHostNotice("The meeting host stopped your screen sharing presentation.");
+              setTimeout(() => setHostNotice(null), 5000);
+            } else if (type === "force-remove" && payload?.targetPeerId === myPeerId) {
+              stopMediaStream();
+              alert("You were removed from the meeting by the host.");
+              router.push("/dashboard");
+              return;
+            } else if (type === "room-lock-changed") {
+              setIsRoomLocked(!!payload?.isLocked);
+              setHostNotice(payload?.isLocked ? "The host locked the meeting." : "The host unlocked the meeting.");
+              setTimeout(() => setHostNotice(null), 5000);
+            } else if (type === "meeting-ended") {
+              stopMediaStream();
+              alert("The meeting has been ended by the host.");
+              router.push("/dashboard");
+              return;
             } else if (type === "user-left") {
               const pc = peerConnectionsRef.current.get(fromPeerId);
               if (pc) {
@@ -636,14 +807,44 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
     setTimeout(() => setCopied(false), 2200);
   };
 
-  const handleJoinMeetingSubmit = (e: FormEvent) => {
+  const handleJoinMeetingSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!displayName.trim()) {
       setNameError("Please enter your display name to join");
       return;
     }
-    setNameError("");
-    setHasJoined(true);
+
+    const isSelfHost = meeting?.host
+      ? displayName.trim().toLowerCase() === meeting.host.trim().toLowerCase() || meeting.host === "Host"
+      : false;
+
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/signal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "join",
+          peerId: myPeerId,
+          displayName,
+          micEnabled,
+          camEnabled,
+          isScreenSharing,
+          isHost: isSelfHost,
+        }),
+      });
+
+      const data = await res.json();
+      if (!data.success && data.message) {
+        setNameError(data.message);
+        return;
+      }
+
+      setNameError("");
+      setHasJoined(true);
+    } catch {
+      setNameError("");
+      setHasJoined(true);
+    }
   };
 
   const handleLeaveCall = () => {
@@ -720,9 +921,45 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
             </div>
           )}
 
+          {isRoomLocked && (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-semibold">
+              <Lock className="w-3.5 h-3.5 text-amber-400" />
+              <span>Room Locked</span>
+            </div>
+          )}
+
+          {/* Host Controls Header Quick Actions */}
+          {hasJoined && isSelfHost && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleHostToggleLock}
+                className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm ${
+                  isRoomLocked
+                    ? "bg-amber-500/20 border-amber-400/50 text-amber-300 hover:bg-amber-500/30"
+                    : "bg-slate-900 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800"
+                }`}
+                title={isRoomLocked ? "Unlock meeting room for new participants" : "Lock meeting room to block new participants"}
+              >
+                {isRoomLocked ? <Lock className="w-3.5 h-3.5 text-amber-400" /> : <LockOpen className="w-3.5 h-3.5 text-slate-400" />}
+                <span className="hidden sm:inline">{isRoomLocked ? "Locked" : "Lock Room"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleHostEndMeeting}
+                className="px-3 py-1.5 rounded-xl bg-rose-600/90 hover:bg-rose-600 border border-rose-500 text-xs font-semibold text-white flex items-center gap-1.5 transition-all shadow-md"
+                title="End meeting for all participants"
+              >
+                <Power className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">End Meeting</span>
+              </button>
+            </div>
+          )}
+
           <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold">
             <ShieldCheck className="w-4 h-4" />
-            <span>WebRTC Screen Sharing Active</span>
+            <span>WebRTC Active</span>
           </div>
 
           <Link
@@ -735,6 +972,20 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
           </Link>
         </div>
       </header>
+
+      {/* Host Toast Notification Banner */}
+      {hostNotice && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-2xl bg-slate-900/95 border border-amber-500/50 text-amber-200 text-xs font-semibold shadow-2xl flex items-center gap-2.5 backdrop-blur-md animate-in fade-in slide-in-from-top-2">
+          <ShieldAlert className="w-4 h-4 text-amber-400 flex-shrink-0" />
+          <span>{hostNotice}</span>
+          <button
+            onClick={() => setHostNotice(null)}
+            className="ml-2 text-slate-400 hover:text-white"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <main className="relative z-10 flex-grow flex flex-col items-center justify-center p-3 sm:p-6 w-full max-w-7xl mx-auto">
@@ -1098,6 +1349,40 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                               >
                                 <Pin className="w-3.5 h-3.5" />
                               </button>
+
+                              {/* Host Quick Actions (Server-Verified) */}
+                              {isSelfHost && !pIsHost && (
+                                <div className="flex items-center gap-1 pl-1 border-l border-slate-800">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleHostMute(p.peerId)}
+                                    className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 transition-colors"
+                                    title="Host Action: Mute Participant Microphone"
+                                  >
+                                    <MicOff className="w-3.5 h-3.5 text-rose-400" />
+                                  </button>
+
+                                  {p.isScreenSharing && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleHostStopShare(p.peerId)}
+                                      className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 transition-colors"
+                                      title="Host Action: Stop Participant Screen Share"
+                                    >
+                                      <MonitorOff className="w-3.5 h-3.5 text-amber-400" />
+                                    </button>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleHostRemove(p.peerId)}
+                                    className="p-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 transition-colors"
+                                    title="Host Action: Remove Participant from Meeting"
+                                  >
+                                    <UserX className="w-3.5 h-3.5 text-rose-400" />
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </div>
                         );

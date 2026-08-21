@@ -5,6 +5,11 @@ import {
   updatePeerState,
   postSignalMessage,
   getRoomSignalsForPeer,
+  hostMutePeer,
+  hostStopScreenSharePeer,
+  hostRemovePeer,
+  hostToggleLock,
+  hostEndMeeting,
 } from "@/lib/signaling";
 
 export async function GET(
@@ -23,6 +28,8 @@ export async function GET(
       success: true,
       peers: result.peers,
       signals: result.signals,
+      isLocked: result.isLocked,
+      isEnded: result.isEnded,
       serverTime: Date.now(),
     });
   } catch (error) {
@@ -50,7 +57,7 @@ export async function POST(
     }
 
     if (action === "join") {
-      const peers = registerPeer(
+      const regResult = registerPeer(
         id,
         peerId,
         displayName || "Guest",
@@ -59,7 +66,22 @@ export async function POST(
         !!isScreenSharing,
         !!isHost
       );
-      return NextResponse.json({ success: true, action: "joined", peers, serverTime: Date.now() });
+
+      if (regResult.error) {
+        return NextResponse.json(
+          { success: false, message: regResult.error, isLocked: regResult.isLocked, isEnded: regResult.isEnded },
+          { status: 403 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        action: "joined",
+        peers: regResult.peers,
+        isLocked: regResult.isLocked,
+        isEnded: regResult.isEnded,
+        serverTime: Date.now(),
+      });
     }
 
     if (action === "leave") {
@@ -75,6 +97,52 @@ export async function POST(
     if (action === "signal" && type && toPeerId) {
       postSignalMessage(id, peerId, toPeerId, type, payload);
       return NextResponse.json({ success: true, action: "signal-queued", serverTime: Date.now() });
+    }
+
+    // --- Host Control Actions (Server-Verified) ---
+
+    if (action === "host-mute") {
+      const { targetPeerId } = body;
+      const res = hostMutePeer(id, peerId, targetPeerId);
+      if (!res.success) {
+        return NextResponse.json({ success: false, message: res.error }, { status: 403 });
+      }
+      return NextResponse.json({ success: true, action: "host-muted", serverTime: Date.now() });
+    }
+
+    if (action === "host-stop-share") {
+      const { targetPeerId } = body;
+      const res = hostStopScreenSharePeer(id, peerId, targetPeerId);
+      if (!res.success) {
+        return NextResponse.json({ success: false, message: res.error }, { status: 403 });
+      }
+      return NextResponse.json({ success: true, action: "host-stopped-share", serverTime: Date.now() });
+    }
+
+    if (action === "host-remove") {
+      const { targetPeerId } = body;
+      const res = hostRemovePeer(id, peerId, targetPeerId);
+      if (!res.success) {
+        return NextResponse.json({ success: false, message: res.error }, { status: 403 });
+      }
+      return NextResponse.json({ success: true, action: "host-removed-peer", serverTime: Date.now() });
+    }
+
+    if (action === "host-toggle-lock") {
+      const { isLocked } = body;
+      const res = hostToggleLock(id, peerId, !!isLocked);
+      if (!res.success) {
+        return NextResponse.json({ success: false, message: res.error }, { status: 403 });
+      }
+      return NextResponse.json({ success: true, action: "host-toggled-lock", isLocked: res.isLocked, serverTime: Date.now() });
+    }
+
+    if (action === "host-end-meeting") {
+      const res = hostEndMeeting(id, peerId);
+      if (!res.success) {
+        return NextResponse.json({ success: false, message: res.error }, { status: 403 });
+      }
+      return NextResponse.json({ success: true, action: "host-ended-meeting", serverTime: Date.now() });
     }
 
     return NextResponse.json(

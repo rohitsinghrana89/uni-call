@@ -7,6 +7,7 @@ export interface Meeting {
   status: "scheduled" | "active" | "ended";
   participantsCount: number;
   isEncrypted: boolean;
+  isLocked?: boolean;
 }
 
 // In-memory server store for meetings metadata
@@ -22,6 +23,7 @@ const meetingsStore: Map<string, Meeting> = new Map([
       status: "active",
       participantsCount: 4,
       isEncrypted: true,
+      isLocked: false,
     },
   ],
   [
@@ -35,6 +37,7 @@ const meetingsStore: Map<string, Meeting> = new Map([
       status: "scheduled",
       participantsCount: 6,
       isEncrypted: true,
+      isLocked: false,
     },
   ],
 ]);
@@ -72,6 +75,7 @@ export function createMeeting(title?: string, host?: string, customId?: string):
     status: "active",
     participantsCount: 1,
     isEncrypted: true,
+    isLocked: false,
   };
 
   meetingsStore.set(id, newMeeting);
@@ -84,6 +88,30 @@ export function createMeeting(title?: string, host?: string, customId?: string):
 export function getMeetingById(id: string): Meeting | undefined {
   const normalizedId = id.toUpperCase().trim();
   return meetingsStore.get(normalizedId);
+}
+
+/**
+ * Updates lock state of a meeting
+ */
+export function setMeetingLocked(id: string, isLocked: boolean): boolean {
+  const meeting = getMeetingById(id);
+  if (meeting) {
+    meeting.isLocked = isLocked;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Updates meeting status (e.g. "ended")
+ */
+export function setMeetingStatus(id: string, status: Meeting["status"]): boolean {
+  const meeting = getMeetingById(id);
+  if (meeting) {
+    meeting.status = status;
+    return true;
+  }
+  return false;
 }
 
 /**
