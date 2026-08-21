@@ -3,8 +3,8 @@
   "/api/meetings/route": "app/api/meetings/route.js",
   "/api/meetings/[id]/route": "app/api/meetings/[id]/route.js",
   "/page": "app/page.js",
-  "/dashboard/page": "app/dashboard/page.js",
   "/login/page": "app/login/page.js",
+  "/signup/page": "app/signup/page.js",
   "/meeting/[id]/page": "app/meeting/[id]/page.js",
-  "/signup/page": "app/signup/page.js"
+  "/dashboard/page": "app/dashboard/page.js"
 }
