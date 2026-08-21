@@ -48,11 +48,12 @@ const MeetingSchema = new Schema<IMeeting>(
     },
   },
   {
+    collection: "meetings",
     timestamps: false,
     toJSON: {
       virtuals: true,
-      transform: (_doc, ret) => {
-        ret.id = ret._id.toString();
+      transform: (_doc, ret: Record<string, any>) => {
+        ret.id = ret._id?.toString();
         delete ret._id;
         delete ret.__v;
         return ret;
@@ -61,6 +62,10 @@ const MeetingSchema = new Schema<IMeeting>(
   }
 );
 
-const Meeting: Model<IMeeting> = mongoose.models.Meeting || mongoose.model<IMeeting>("Meeting", MeetingSchema);
+if (mongoose.models.Meeting && mongoose.models.Meeting.collection?.name !== "meetings") {
+  delete mongoose.models.Meeting;
+}
+
+const Meeting: Model<IMeeting> = mongoose.models.Meeting || mongoose.model<IMeeting>("Meeting", MeetingSchema, "meetings");
 
 export default Meeting;

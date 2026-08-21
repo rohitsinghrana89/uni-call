@@ -32,11 +32,12 @@ const UserSchema = new Schema<IUser>(
     },
   },
   {
+    collection: "users",
     timestamps: false,
     toJSON: {
       virtuals: true,
-      transform: (_doc, ret) => {
-        ret.id = ret._id.toString();
+      transform: (_doc, ret: Record<string, any>) => {
+        ret.id = ret._id?.toString();
         delete ret._id;
         delete ret.__v;
         delete ret.password;
@@ -46,6 +47,10 @@ const UserSchema = new Schema<IUser>(
   }
 );
 
-const User: Model<IUser> = mongoose.models.User || mongoose.model<IUser>("User", UserSchema);
+if (mongoose.models.User && mongoose.models.User.collection?.name !== "users") {
+  delete mongoose.models.User;
+}
+
+const User: Model<IUser> = mongoose.models.User || mongoose.model<IUser>("User", UserSchema, "users");
 
 export default User;

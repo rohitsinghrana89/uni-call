@@ -30,11 +30,12 @@ const MessageSchema = new Schema<IMessage>(
     },
   },
   {
+    collection: "messages",
     timestamps: false,
     toJSON: {
       virtuals: true,
-      transform: (_doc, ret) => {
-        ret.id = ret._id.toString();
+      transform: (_doc, ret: Record<string, any>) => {
+        ret.id = ret._id?.toString();
         delete ret._id;
         delete ret.__v;
         return ret;
@@ -43,7 +44,11 @@ const MessageSchema = new Schema<IMessage>(
   }
 );
 
+if (mongoose.models.Message && mongoose.models.Message.collection?.name !== "messages") {
+  delete mongoose.models.Message;
+}
+
 const Message: Model<IMessage> =
-  mongoose.models.Message || mongoose.model<IMessage>("Message", MessageSchema);
+  mongoose.models.Message || mongoose.model<IMessage>("Message", MessageSchema, "messages");
 
 export default Message;

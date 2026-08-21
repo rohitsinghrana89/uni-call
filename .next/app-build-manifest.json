@@ -16,30 +16,30 @@
       "static/chunks/main-app.js",
       "static/chunks/app/page.js"
     ],
-    "/api/meetings/[id]/route": [
+    "/signup/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/api/meetings/[id]/route.js"
+      "static/chunks/app/signup/page.js"
     ],
-    "/dashboard/page": [
+    "/api/auth/signup/route": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/dashboard/page.js"
+      "static/chunks/app/api/auth/signup/route.js"
     ],
     "/login/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/login/page.js"
     ],
-    "/api/meetings/route": [
+    "/api/auth/login/route": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/api/meetings/route.js"
+      "static/chunks/app/api/auth/login/route.js"
     ],
-    "/api/meetings/[id]/signal/route": [
+    "/dashboard/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/api/meetings/[id]/signal/route.js"
+      "static/chunks/app/dashboard/page.js"
     ]
   }
 }

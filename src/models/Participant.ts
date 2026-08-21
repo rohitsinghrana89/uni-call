@@ -29,11 +29,12 @@ const ParticipantSchema = new Schema<IParticipant>(
     },
   },
   {
+    collection: "participants",
     timestamps: false,
     toJSON: {
       virtuals: true,
-      transform: (_doc, ret) => {
-        ret.id = ret._id.toString();
+      transform: (_doc, ret: Record<string, any>) => {
+        ret.id = ret._id?.toString();
         delete ret._id;
         delete ret.__v;
         return ret;
@@ -42,7 +43,11 @@ const ParticipantSchema = new Schema<IParticipant>(
   }
 );
 
+if (mongoose.models.Participant && mongoose.models.Participant.collection?.name !== "participants") {
+  delete mongoose.models.Participant;
+}
+
 const Participant: Model<IParticipant> =
-  mongoose.models.Participant || mongoose.model<IParticipant>("Participant", ParticipantSchema);
+  mongoose.models.Participant || mongoose.model<IParticipant>("Participant", ParticipantSchema, "participants");
 
 export default Participant;
