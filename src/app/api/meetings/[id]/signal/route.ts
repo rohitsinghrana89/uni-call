@@ -40,7 +40,7 @@ export async function POST(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { action, peerId, displayName, micEnabled, camEnabled, isScreenSharing, toPeerId, type, payload } = body;
+    const { action, peerId, displayName, micEnabled, camEnabled, isScreenSharing, isHost, toPeerId, type, payload } = body;
 
     if (!peerId) {
       return NextResponse.json(
@@ -56,7 +56,8 @@ export async function POST(
         displayName || "Guest",
         !!micEnabled,
         !!camEnabled,
-        !!isScreenSharing
+        !!isScreenSharing,
+        !!isHost
       );
       return NextResponse.json({ success: true, action: "joined", peers, serverTime: Date.now() });
     }
@@ -67,7 +68,7 @@ export async function POST(
     }
 
     if (action === "state-change") {
-      updatePeerState(id, peerId, !!micEnabled, !!camEnabled, !!isScreenSharing);
+      updatePeerState(id, peerId, !!micEnabled, !!camEnabled, !!isScreenSharing, isHost);
       return NextResponse.json({ success: true, action: "state-updated", serverTime: Date.now() });
     }
 

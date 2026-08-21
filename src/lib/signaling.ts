@@ -4,6 +4,7 @@ export interface PeerInfo {
   micEnabled: boolean;
   camEnabled: boolean;
   isScreenSharing?: boolean;
+  isHost?: boolean;
   joinedAt: number;
 }
 
@@ -44,7 +45,8 @@ export function registerPeer(
   displayName: string,
   micEnabled: boolean,
   camEnabled: boolean,
-  isScreenSharing?: boolean
+  isScreenSharing?: boolean,
+  isHost?: boolean
 ): PeerInfo[] {
   const room = getOrCreateRoom(roomId);
   const now = Date.now();
@@ -57,6 +59,7 @@ export function registerPeer(
     micEnabled,
     camEnabled,
     isScreenSharing: !!isScreenSharing,
+    isHost: !!isHost,
     joinedAt: now,
   });
 
@@ -68,7 +71,7 @@ export function registerPeer(
       fromPeerId: peerId,
       toPeerId: "ALL",
       type: "user-joined",
-      payload: { peerId, displayName, micEnabled, camEnabled, isScreenSharing },
+      payload: { peerId, displayName, micEnabled, camEnabled, isScreenSharing, isHost: !!isHost },
       timestamp: now,
     };
     room.signals.push(notice);
@@ -85,7 +88,8 @@ export function updatePeerState(
   peerId: string,
   micEnabled: boolean,
   camEnabled: boolean,
-  isScreenSharing?: boolean
+  isScreenSharing?: boolean,
+  isHost?: boolean
 ) {
   const room = getOrCreateRoom(roomId);
   const peer = room.peers.get(peerId);
@@ -93,6 +97,7 @@ export function updatePeerState(
     peer.micEnabled = micEnabled;
     peer.camEnabled = camEnabled;
     peer.isScreenSharing = !!isScreenSharing;
+    if (isHost !== undefined) peer.isHost = !!isHost;
 
     const now = Date.now();
     const notice: SignalMessage = {
@@ -100,7 +105,7 @@ export function updatePeerState(
       fromPeerId: peerId,
       toPeerId: "ALL",
       type: "state-change",
-      payload: { peerId, micEnabled, camEnabled, isScreenSharing: !!isScreenSharing },
+      payload: { peerId, micEnabled, camEnabled, isScreenSharing: !!isScreenSharing, isHost: peer.isHost },
       timestamp: now,
     };
     room.signals.push(notice);
