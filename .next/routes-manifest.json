@@ -28,6 +28,14 @@
       "namedRegex": "^/api/meetings/(?<nxtPid>[^/]+?)(?:/)?$"
     },
     {
+      "page": "/api/meetings/[id]/signal",
+      "regex": "^/api/meetings/([^/]+?)/signal(?:/)?$",
+      "routeKeys": {
+        "nxtPid": "nxtPid"
+      },
+      "namedRegex": "^/api/meetings/(?<nxtPid>[^/]+?)/signal(?:/)?$"
+    },
+    {
       "page": "/meeting/[id]",
       "regex": "^/meeting/([^/]+?)(?:/)?$",
       "routeKeys": {

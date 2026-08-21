@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, use, FormEvent } from "react";
+import { useState, useEffect, useRef, use, FormEvent, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -28,7 +28,6 @@ import {
   Send,
   X,
   RefreshCw,
-  Camera,
   Play
 } from "lucide-react";
 
@@ -44,68 +43,22 @@ interface MeetingData {
   isEncrypted: boolean;
 }
 
-// Mock Call Participants Data for grid demonstration
-const CALL_PARTICIPANTS = [
-  {
-    id: "p-1",
-    name: "Sarah Jenkins",
-    role: "Host",
-    isHost: true,
-    micOn: true,
-    camOn: true,
-    isSpeaking: true,
-    initials: "SJ",
-    gradient: "from-cyan-500 to-blue-600",
-  },
-  {
-    id: "p-2",
-    name: "David Chen",
-    role: "Lead Engineer",
-    isHost: false,
-    micOn: true,
-    camOn: true,
-    isSpeaking: false,
-    initials: "DC",
-    gradient: "from-blue-600 to-indigo-600",
-  },
-  {
-    id: "p-3",
-    name: "Emily Watson",
-    role: "Product Designer",
-    isHost: false,
-    micOn: false,
-    camOn: true,
-    isSpeaking: false,
-    initials: "EW",
-    gradient: "from-purple-600 to-pink-600",
-  },
-  {
-    id: "p-4",
-    name: "Marcus Vance",
-    role: "Security Spec",
-    isHost: false,
-    micOn: true,
-    camOn: false,
-    isSpeaking: false,
-    initials: "MV",
-    gradient: "from-emerald-500 to-teal-700",
-  },
-];
+interface RemotePeer {
+  peerId: string;
+  displayName: string;
+  micEnabled: boolean;
+  camEnabled: boolean;
+  isScreenSharing?: boolean;
+  stream: MediaStream | null;
+}
 
-// Mock In-Call Chat Messages
+// In-Call Chat Messages
 const INITIAL_CHAT = [
   {
     id: "c-1",
-    sender: "Sarah Jenkins",
-    time: "4:02 PM",
-    text: "Welcome everyone! WebRTC Real Browser Media Access is live.",
-    isSelf: false,
-  },
-  {
-    id: "c-2",
-    sender: "David Chen",
-    time: "4:03 PM",
-    text: "Testing local video preview and mic mute toggles.",
+    sender: "System",
+    time: "Just now",
+    text: "Screen Sharing engine ready. Click 'Share Screen' in the control bar to present your screen, window, or browser tab.",
     isSelf: false,
   },
 ];
@@ -118,26 +71,34 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
   const [meeting, setMeeting] = useState<MeetingData | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Pre-join Lobby Form & User States
+  // User & Pre-join Lobby States
   const [displayName, setDisplayName] = useState("Alex Morgan");
   const [nameError, setNameError] = useState("");
   const [copied, setCopied] = useState(false);
   const [hasJoined, setHasJoined] = useState(false);
   const [originUrl, setOriginUrl] = useState("");
 
-  // WebRTC Real Browser Media Access States
+  // WebRTC Local Media Access States
   const [micEnabled, setMicEnabled] = useState(true);
   const [camEnabled, setCamEnabled] = useState(true);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [isInitializingMedia, setIsInitializingMedia] = useState(false);
 
-  // Video element refs for live WebRTC stream binding
+  // WebRTC Video & Stream References
   const lobbyVideoRef = useRef<HTMLVideoElement | null>(null);
   const roomVideoRef = useRef<HTMLVideoElement | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+
+  // WebRTC Multi-User Signaling & Peer Mesh States
+  const [myPeerId] = useState(() => `peer-${Math.random().toString(36).substring(2, 9)}`);
+  const [remotePeers, setRemotePeers] = useState<Map<string, RemotePeer>>(new Map());
+  const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const remoteStreamsRef = useRef<Map<string, MediaStream>>(new Map());
+  const lastSignalTimeRef = useRef<number>(0);
 
   // In-Call Drawers & Controls
-  const [screenSharing, setScreenSharing] = useState(false);
   const [showChatSidebar, setShowChatSidebar] = useState(false);
   const [showParticipantsSidebar, setShowParticipantsSidebar] = useState(false);
   const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
@@ -146,15 +107,95 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
   const [chatMessages, setChatMessages] = useState(INITIAL_CHAT);
   const [newMessageText, setNewMessageText] = useState("");
 
-  // Timer State
-  const [callSeconds, setCallSeconds] = useState(254);
+  // Call Timer
+  const [callSeconds, setCallSeconds] = useState(0);
 
-  // Initialize WebRTC Real Media Stream
+  // WebRTC Configuration (Google STUN)
+  const rtcConfig: RTCConfiguration = {
+    iceServers: [
+      { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+    ],
+  };
+
+  // Helper to post signaling message to API
+  const sendSignalMessage = useCallback(
+    async (type: string, toPeerId: string, payload?: any) => {
+      try {
+        await fetch(`/api/meetings/${meetingId}/signal`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "signal",
+            peerId: myPeerId,
+            toPeerId,
+            type,
+            payload,
+          }),
+        });
+      } catch (err) {
+        console.error("Failed to send signaling message:", err);
+      }
+    },
+    [meetingId, myPeerId]
+  );
+
+  // Helper to create RTCPeerConnection for a remote peer
+  const createPeerConnection = useCallback(
+    (targetPeerId: string, targetName: string) => {
+      if (peerConnectionsRef.current.has(targetPeerId)) {
+        return peerConnectionsRef.current.get(targetPeerId)!;
+      }
+
+      const pc = new RTCPeerConnection(rtcConfig);
+      peerConnectionsRef.current.set(targetPeerId, pc);
+
+      // Add local media tracks to peer connection (screen track if sharing, else camera track)
+      const currentVideoTrack = isScreenSharing && screenStreamRef.current
+        ? screenStreamRef.current.getVideoTracks()[0]
+        : localStreamRef.current?.getVideoTracks()[0];
+
+      if (currentVideoTrack) {
+        pc.addTrack(currentVideoTrack, localStreamRef.current || screenStreamRef.current!);
+      }
+      if (localStreamRef.current?.getAudioTracks()[0]) {
+        pc.addTrack(localStreamRef.current.getAudioTracks()[0], localStreamRef.current);
+      }
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          sendSignalMessage("ice-candidate", targetPeerId, event.candidate);
+        }
+      };
+
+      pc.ontrack = (event) => {
+        const remoteStream = event.streams[0] || new MediaStream([event.track]);
+        remoteStreamsRef.current.set(targetPeerId, remoteStream);
+
+        setRemotePeers((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(targetPeerId);
+          next.set(targetPeerId, {
+            peerId: targetPeerId,
+            displayName: existing?.displayName || targetName || "Remote Peer",
+            micEnabled: existing?.micEnabled ?? true,
+            camEnabled: existing?.camEnabled ?? true,
+            isScreenSharing: existing?.isScreenSharing ?? false,
+            stream: remoteStream,
+          });
+          return next;
+        });
+      };
+
+      return pc;
+    },
+    [isScreenSharing, sendSignalMessage]
+  );
+
+  // Initialize WebRTC Local Camera & Microphone Stream
   const initMediaStream = async () => {
     setIsInitializingMedia(true);
     setMediaError(null);
 
-    // Stop existing stream tracks if re-initializing
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
@@ -166,17 +207,12 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: "user",
-        },
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
         audio: true,
       });
 
       localStreamRef.current = stream;
 
-      // Apply initial mic & camera mute states
       stream.getVideoTracks().forEach((track) => {
         track.enabled = camEnabled;
       });
@@ -184,29 +220,24 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
         track.enabled = micEnabled;
       });
 
-      // Bind stream to video elements
       if (lobbyVideoRef.current) {
         lobbyVideoRef.current.srcObject = stream;
       }
-      if (roomVideoRef.current) {
+      if (roomVideoRef.current && !isScreenSharing) {
         roomVideoRef.current.srcObject = stream;
       }
     } catch (err: unknown) {
       console.error("WebRTC getUserMedia Error:", err);
       const errorObj = err as { name?: string; message?: string };
-      
+
       if (errorObj.name === "NotAllowedError" || errorObj.name === "PermissionDeniedError") {
         setMediaError(
           "Camera and Microphone permissions were denied by your browser. Please click the lock or camera icon in your address bar to grant permissions and click 'Retry Permission'."
         );
       } else if (errorObj.name === "NotFoundError" || errorObj.name === "DevicesNotFoundError") {
-        setMediaError(
-          "No camera or microphone device was found on your computer. Please connect a webcam/mic and try again."
-        );
+        setMediaError("No camera or microphone device was found on your computer.");
       } else if (errorObj.name === "NotReadableError" || errorObj.name === "TrackStartError") {
-        setMediaError(
-          "Your camera or microphone is currently in use by another application (such as Zoom, Teams, or Skype)."
-        );
+        setMediaError("Your camera or microphone is currently in use by another application.");
       } else {
         setMediaError(errorObj.message || "Failed to access browser camera and microphone.");
       }
@@ -215,8 +246,125 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
     }
   };
 
-  // Stop WebRTC Tracks Cleanup
-  const stopMediaStream = () => {
+  // Stop Screen Sharing & Restore Camera Track
+  const stopScreenSharing = useCallback(async () => {
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach((track) => track.stop());
+      screenStreamRef.current = null;
+    }
+
+    const cameraTrack = localStreamRef.current?.getVideoTracks()[0] || null;
+
+    // Replace track back to camera on all RTCPeerConnections
+    peerConnectionsRef.current.forEach(async (pc) => {
+      const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+      if (sender) {
+        await sender.replaceTrack(cameraTrack);
+      }
+    });
+
+    // Re-bind local camera stream to room video element
+    if (roomVideoRef.current && localStreamRef.current) {
+      roomVideoRef.current.srcObject = localStreamRef.current;
+    }
+
+    setIsScreenSharing(false);
+
+    if (hasJoined) {
+      fetch(`/api/meetings/${meetingId}/signal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "state-change",
+          peerId: myPeerId,
+          micEnabled,
+          camEnabled,
+          isScreenSharing: false,
+        }),
+      }).catch(() => {});
+    }
+  }, [hasJoined, meetingId, myPeerId, micEnabled, camEnabled]);
+
+  // Start Real Browser Screen Sharing (`getDisplayMedia`)
+  const startScreenSharing = async () => {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        alert("Screen sharing is not supported in your browser.");
+        return;
+      }
+
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: false,
+      });
+
+      screenStreamRef.current = screenStream;
+      const screenTrack = screenStream.getVideoTracks()[0];
+
+      // Handle when user clicks native browser "Stop sharing" bar
+      screenTrack.onended = () => {
+        stopScreenSharing();
+      };
+
+      // Replace video track on all peer connections to stream screen over WebRTC
+      peerConnectionsRef.current.forEach(async (pc) => {
+        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+        if (sender) {
+          await sender.replaceTrack(screenTrack);
+        }
+      });
+
+      // Bind screen stream to local video element preview
+      if (roomVideoRef.current) {
+        roomVideoRef.current.srcObject = screenStream;
+      }
+
+      setIsScreenSharing(true);
+
+      // Broadcast screen share state change via signaling
+      if (hasJoined) {
+        fetch(`/api/meetings/${meetingId}/signal`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "state-change",
+            peerId: myPeerId,
+            micEnabled,
+            camEnabled,
+            isScreenSharing: true,
+          }),
+        }).catch(() => {});
+      }
+    } catch (err) {
+      console.error("Screen sharing cancelled or failed:", err);
+    }
+  };
+
+  const toggleScreenSharing = () => {
+    if (isScreenSharing) {
+      stopScreenSharing();
+    } else {
+      startScreenSharing();
+    }
+  };
+
+  // Stop Media Stream Cleanup
+  const stopMediaStream = useCallback(() => {
+    if (isScreenSharing) {
+      stopScreenSharing();
+    }
+
+    fetch(`/api/meetings/${meetingId}/signal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "leave", peerId: myPeerId }),
+    }).catch(() => {});
+
+    peerConnectionsRef.current.forEach((pc) => pc.close());
+    peerConnectionsRef.current.clear();
+    remoteStreamsRef.current.clear();
+    setRemotePeers(new Map());
+
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
@@ -227,9 +375,9 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
     if (roomVideoRef.current) {
       roomVideoRef.current.srcObject = null;
     }
-  };
+  }, [isScreenSharing, stopScreenSharing, meetingId, myPeerId]);
 
-  // Mount Effect: Fetch Meeting & Request WebRTC Stream
+  // Mount Effect
   useEffect(() => {
     if (typeof window !== "undefined") {
       setOriginUrl(window.location.origin);
@@ -246,11 +394,11 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
             id: meetingId,
             url: `/meeting/${meetingId}`,
             fullUrl: `${window.location.origin}/meeting/${meetingId}`,
-            title: `Strategy & Product Sync (${meetingId})`,
-            host: "Sarah Jenkins",
+            title: `Meeting Room (${meetingId})`,
+            host: "Host",
             createdAt: new Date().toISOString(),
             status: "active",
-            participantsCount: 5,
+            participantsCount: 1,
             isEncrypted: true,
           });
         }
@@ -259,11 +407,11 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
           id: meetingId,
           url: `/meeting/${meetingId}`,
           fullUrl: `${window.location.origin}/meeting/${meetingId}`,
-          title: `Strategy & Product Sync (${meetingId})`,
-          host: "Sarah Jenkins",
+          title: `Meeting Room (${meetingId})`,
+          host: "Host",
           createdAt: new Date().toISOString(),
           status: "active",
-          participantsCount: 5,
+          participantsCount: 1,
           isEncrypted: true,
         });
       } finally {
@@ -274,22 +422,141 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
     fetchMeeting();
     initMediaStream();
 
-    // Cleanup on unmount or tab close
     return () => {
       stopMediaStream();
     };
-  }, [meetingId]);
+  }, [meetingId, stopMediaStream]);
 
-  // Re-bind video element when switching to in-call view
+  // Re-bind video element when joining call
   useEffect(() => {
-    if (hasJoined && localStreamRef.current && roomVideoRef.current) {
-      roomVideoRef.current.srcObject = localStreamRef.current;
+    if (hasJoined && roomVideoRef.current) {
+      roomVideoRef.current.srcObject = isScreenSharing && screenStreamRef.current
+        ? screenStreamRef.current
+        : localStreamRef.current;
     } else if (!hasJoined && localStreamRef.current && lobbyVideoRef.current) {
       lobbyVideoRef.current.srcObject = localStreamRef.current;
     }
-  }, [hasJoined]);
+  }, [hasJoined, isScreenSharing]);
 
-  // In-Call Timer Interval
+  // WebRTC Multi-User Signaling Polling Loop
+  useEffect(() => {
+    if (!hasJoined) return;
+
+    fetch(`/api/meetings/${meetingId}/signal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "join",
+        peerId: myPeerId,
+        displayName,
+        micEnabled,
+        camEnabled,
+        isScreenSharing,
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.serverTime) lastSignalTimeRef.current = data.serverTime - 500;
+      })
+      .catch((err) => console.error("Signaling join error:", err));
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `/api/meetings/${meetingId}/signal?peerId=${myPeerId}&since=${lastSignalTimeRef.current}`
+        );
+        const data = await res.json();
+        if (!data.success) return;
+
+        if (data.serverTime) {
+          lastSignalTimeRef.current = data.serverTime;
+        }
+
+        if (data.peers) {
+          setRemotePeers((prev) => {
+            const next = new Map(prev);
+            data.peers.forEach((p: any) => {
+              if (p.peerId !== myPeerId) {
+                const existing = next.get(p.peerId);
+                next.set(p.peerId, {
+                  peerId: p.peerId,
+                  displayName: p.displayName,
+                  micEnabled: p.micEnabled,
+                  camEnabled: p.camEnabled,
+                  isScreenSharing: p.isScreenSharing,
+                  stream: existing?.stream || remoteStreamsRef.current.get(p.peerId) || null,
+                });
+              }
+            });
+            return next;
+          });
+        }
+
+        if (data.signals && data.signals.length > 0) {
+          for (const sig of data.signals) {
+            const { fromPeerId, type, payload } = sig;
+
+            if (type === "user-joined") {
+              const pc = createPeerConnection(fromPeerId, payload.displayName);
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              await sendSignalMessage("offer", fromPeerId, offer);
+            } else if (type === "offer") {
+              const pc = createPeerConnection(fromPeerId, payload.displayName || "Remote Peer");
+              await pc.setRemoteDescription(new RTCSessionDescription(payload));
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              await sendSignalMessage("answer", fromPeerId, answer);
+            } else if (type === "answer") {
+              const pc = peerConnectionsRef.current.get(fromPeerId);
+              if (pc && pc.signalingState !== "stable") {
+                await pc.setRemoteDescription(new RTCSessionDescription(payload));
+              }
+            } else if (type === "ice-candidate") {
+              const pc = peerConnectionsRef.current.get(fromPeerId);
+              if (pc) {
+                await pc.addIceCandidate(new RTCIceCandidate(payload)).catch(() => {});
+              }
+            } else if (type === "state-change") {
+              setRemotePeers((prev) => {
+                const next = new Map(prev);
+                const peer = next.get(fromPeerId);
+                if (peer) {
+                  next.set(fromPeerId, {
+                    ...peer,
+                    micEnabled: payload.micEnabled,
+                    camEnabled: payload.camEnabled,
+                    isScreenSharing: payload.isScreenSharing,
+                  });
+                }
+                return next;
+              });
+            } else if (type === "user-left") {
+              const pc = peerConnectionsRef.current.get(fromPeerId);
+              if (pc) {
+                pc.close();
+                peerConnectionsRef.current.delete(fromPeerId);
+              }
+              remoteStreamsRef.current.delete(fromPeerId);
+              setRemotePeers((prev) => {
+                const next = new Map(prev);
+                next.delete(fromPeerId);
+                return next;
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Signaling poll error:", err);
+      }
+    }, 1000);
+
+    return () => {
+      clearInterval(pollInterval);
+    };
+  }, [hasJoined, meetingId, myPeerId, displayName, micEnabled, camEnabled, isScreenSharing, createPeerConnection, sendSignalMessage]);
+
+  // In-Call Timer
   useEffect(() => {
     if (!hasJoined) return;
     const interval = setInterval(() => {
@@ -307,6 +574,19 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
         track.enabled = nextState;
       });
     }
+    if (hasJoined) {
+      fetch(`/api/meetings/${meetingId}/signal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "state-change",
+          peerId: myPeerId,
+          micEnabled,
+          camEnabled: nextState,
+          isScreenSharing,
+        }),
+      }).catch(() => {});
+    }
   };
 
   // Toggle Microphone Track
@@ -317,6 +597,19 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
       localStreamRef.current.getAudioTracks().forEach((track) => {
         track.enabled = nextState;
       });
+    }
+    if (hasJoined) {
+      fetch(`/api/meetings/${meetingId}/signal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "state-change",
+          peerId: myPeerId,
+          micEnabled: nextState,
+          camEnabled,
+          isScreenSharing,
+        }),
+      }).catch(() => {});
     }
   };
 
@@ -366,12 +659,15 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
     setNewMessageText("");
   };
 
+  const remotePeerList = Array.from(remotePeers.values());
+  const totalParticipantsCount = remotePeerList.length + 1;
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#080B11] text-slate-100 flex items-center justify-center bg-grid-pattern">
         <div className="flex flex-col items-center gap-3">
           <div className="w-10 h-10 border-4 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin" />
-          <p className="text-xs text-slate-400 font-medium">Securing WebRTC Meeting Room...</p>
+          <p className="text-xs text-slate-400 font-medium">Loading WebRTC Screen Sharing & Media Engine...</p>
         </div>
       </div>
     );
@@ -417,7 +713,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
 
           <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold">
             <ShieldCheck className="w-4 h-4" />
-            <span>WebRTC Encrypted</span>
+            <span>WebRTC Screen Sharing Active</span>
           </div>
 
           <Link
@@ -437,53 +733,39 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
           /* Active Call Meeting Room View */
           <div className="w-full flex-grow flex flex-col lg:flex-row gap-4 h-[calc(100vh-160px)] min-h-[550px] relative">
             
-            {/* Left/Center: Video Grid Area */}
+            {/* Video Grid Area */}
             <div className="flex-1 flex flex-col justify-between space-y-4 overflow-y-auto pr-1">
               
-              {/* Screen Share Mode Banner / Tile */}
-              {screenSharing && (
-                <div className="relative aspect-video w-full rounded-3xl bg-slate-950 border-2 border-cyan-500/80 overflow-hidden shadow-glow-cyan flex flex-col items-center justify-center">
-                  <div className="absolute top-4 left-4 glass-pill px-3 py-1.5 rounded-xl text-xs font-bold text-cyan-400 flex items-center gap-2 border border-cyan-500/30">
-                    <Monitor className="w-4 h-4 text-cyan-400 animate-pulse" />
-                    <span>{displayName} is Sharing Screen (4K Presentation)</span>
-                  </div>
-                  
-                  <div className="p-8 text-center space-y-3">
-                    <div className="w-16 h-16 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 mx-auto flex items-center justify-center text-cyan-400">
-                      <Monitor className="w-8 h-8" />
-                    </div>
-                    <h3 className="text-xl font-bold text-white">Q3 Architecture & WebRTC Audio Pipeline Specs</h3>
-                    <p className="text-xs text-slate-400 max-w-md mx-auto">
-                      Real-time desktop presentation stream active.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Responsive Video Grid */}
+              {/* Dynamic WebRTC Video Grid */}
               <div className={`grid gap-4 w-full flex-grow ${
-                screenSharing
-                  ? "grid-cols-2 sm:grid-cols-4"
+                totalParticipantsCount === 1
+                  ? "grid-cols-1 max-w-4xl mx-auto"
+                  : totalParticipantsCount === 2
+                  ? "grid-cols-1 sm:grid-cols-2"
                   : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
               }`}>
                 
-                {/* 1. Real Local WebRTC Camera Video Tile */}
+                {/* 1. Local User Video / Shared Screen Tile */}
                 <div className={`relative aspect-video rounded-3xl bg-slate-950 border transition-all overflow-hidden flex flex-col items-center justify-center shadow-2xl group ${
-                  pinnedParticipantId === "self" ? "border-cyan-400 ring-2 ring-cyan-500/30" : "border-slate-800"
+                  isScreenSharing
+                    ? "border-cyan-400 ring-4 ring-cyan-500/30"
+                    : pinnedParticipantId === "self"
+                    ? "border-cyan-400 ring-2 ring-cyan-500/30"
+                    : "border-slate-800"
                 }`}>
-                  {/* Real WebRTC Video Tag */}
+                  {/* Local Video Tag (Displays Camera Stream or Shared Screen Stream) */}
                   <video
                     ref={roomVideoRef}
                     autoPlay
                     playsInline
                     muted
                     className={`w-full h-full object-cover transition-opacity duration-300 ${
-                      camEnabled ? "opacity-100" : "opacity-0 absolute"
+                      (camEnabled || isScreenSharing) && !mediaError ? "opacity-100" : "opacity-0 absolute"
                     }`}
                   />
 
-                  {/* Fallback Avatar when Camera is Off */}
-                  {!camEnabled && (
+                  {/* Fallback Avatar when Camera & Screen Sharing are Off */}
+                  {(!camEnabled && !isScreenSharing) && (
                     <div className="flex flex-col items-center justify-center text-slate-500 space-y-2">
                       <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-violet-600 to-cyan-500 flex items-center justify-center font-bold text-xl text-white shadow-glow">
                         {displayName.trim() ? displayName.trim().slice(0, 2).toUpperCase() : "YOU"}
@@ -492,10 +774,18 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                     </div>
                   )}
 
-                  {/* Tile Overlays */}
+                  {/* Screen Sharing Status Banner Overlay */}
+                  {isScreenSharing && (
+                    <div className="absolute top-3 left-3 glass-pill px-3 py-1.5 rounded-xl text-xs font-bold text-cyan-300 border border-cyan-400/40 flex items-center gap-2 bg-slate-950/80 z-20">
+                      <Monitor className="w-4 h-4 text-cyan-400 animate-pulse" />
+                      <span>You are Presenting Your Screen</span>
+                    </div>
+                  )}
+
+                  {/* Participant Name Badge */}
                   <div className="absolute bottom-3 left-3 glass-pill px-3 py-1 rounded-xl text-xs font-semibold text-white flex items-center gap-2 border border-white/10 z-20">
                     {micEnabled ? <Mic className="w-3.5 h-3.5 text-emerald-400" /> : <MicOff className="w-3.5 h-3.5 text-rose-400" />}
-                    <span>{displayName} (You)</span>
+                    <span>{displayName} (You) {isScreenSharing ? "• Presenting" : ""}</span>
                   </div>
 
                   <button
@@ -507,53 +797,63 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                   </button>
                 </div>
 
-                {/* 2. Team Participant Cards */}
-                {CALL_PARTICIPANTS.map((participant) => (
+                {/* 2. Real WebRTC Remote Participant Video / Screen Share Tiles */}
+                {remotePeerList.map((remotePeer) => (
                   <div
-                    key={participant.id}
+                    key={remotePeer.peerId}
                     className={`relative aspect-video rounded-3xl bg-slate-950 border transition-all overflow-hidden flex flex-col items-center justify-center shadow-2xl group ${
-                      participant.isSpeaking ? "border-cyan-500/90 ring-2 ring-cyan-500/30" : "border-slate-800"
-                    } ${pinnedParticipantId === participant.id ? "ring-2 ring-cyan-400" : ""}`}
+                      remotePeer.isScreenSharing
+                        ? "border-cyan-400 ring-4 ring-cyan-500/30"
+                        : pinnedParticipantId === remotePeer.peerId
+                        ? "ring-2 ring-cyan-400 border-cyan-400"
+                        : "border-slate-800"
+                    }`}
                   >
-                    {participant.camOn ? (
-                      <div className={`absolute inset-0 bg-gradient-to-tr ${participant.gradient} opacity-20 flex flex-col items-center justify-center p-4 text-center`} />
-                    ) : null}
+                    <video
+                      ref={(el) => {
+                        if (el && remotePeer.stream) {
+                          el.srcObject = remotePeer.stream;
+                        }
+                      }}
+                      autoPlay
+                      playsInline
+                      className={`w-full h-full object-cover transition-opacity duration-300 ${
+                        remotePeer.camEnabled || remotePeer.isScreenSharing ? "opacity-100" : "opacity-0 absolute"
+                      }`}
+                    />
 
-                    <div className="relative z-10 flex flex-col items-center justify-center p-4 text-center">
-                      <div className={`w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-gradient-to-tr ${participant.gradient} flex items-center justify-center font-bold text-xl sm:text-2xl text-white shadow-glow mb-2 ${
-                        participant.isSpeaking ? "scale-105 transition-transform" : ""
-                      }`}>
-                        {participant.initials}
+                    {!remotePeer.camEnabled && !remotePeer.isScreenSharing && (
+                      <div className="flex flex-col items-center justify-center text-slate-500 space-y-2 p-4 text-center">
+                        <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center font-bold text-xl text-white shadow-glow">
+                          {remotePeer.displayName.trim() ? remotePeer.displayName.trim().slice(0, 2).toUpperCase() : "PEER"}
+                        </div>
+                        <h3 className="text-xs font-bold text-white">{remotePeer.displayName}</h3>
+                        <p className="text-[10px] text-slate-400">Camera Off</p>
                       </div>
-                      <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
-                        {participant.name}
-                        {participant.isHost && (
-                          <span className="text-[9px] uppercase px-1.5 py-0.5 rounded font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                            Host
-                          </span>
-                        )}
-                      </h3>
-                      <p className="text-[10px] text-slate-400 font-medium">{participant.role}</p>
-                    </div>
+                    )}
+
+                    {remotePeer.isScreenSharing && (
+                      <div className="absolute top-3 left-3 glass-pill px-3 py-1.5 rounded-xl text-xs font-bold text-cyan-300 border border-cyan-400/40 flex items-center gap-2 bg-slate-950/80 z-20">
+                        <Monitor className="w-4 h-4 text-cyan-400 animate-pulse" />
+                        <span>{remotePeer.displayName} is Presenting Screen</span>
+                      </div>
+                    )}
 
                     <div className="absolute bottom-3 left-3 glass-pill px-3 py-1 rounded-xl text-xs font-semibold text-white flex items-center gap-2 border border-white/10 z-20">
-                      {participant.micOn ? (
-                        <span className="flex items-center gap-1 text-emerald-400">
-                          <Mic className="w-3.5 h-3.5 text-emerald-400" />
-                          {participant.isSpeaking && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />}
-                        </span>
+                      {remotePeer.micEnabled ? (
+                        <Mic className="w-3.5 h-3.5 text-emerald-400" />
                       ) : (
                         <MicOff className="w-3.5 h-3.5 text-rose-400" />
                       )}
-                      <span>{participant.name}</span>
+                      <span>{remotePeer.displayName} {remotePeer.isScreenSharing ? "• Screen" : ""}</span>
                     </div>
 
                     <button
-                      onClick={() => setPinnedParticipantId(pinnedParticipantId === participant.id ? null : participant.id)}
+                      onClick={() => setPinnedParticipantId(pinnedParticipantId === remotePeer.peerId ? null : remotePeer.peerId)}
                       className="absolute top-3 right-3 p-2 rounded-xl glass-pill text-slate-400 hover:text-white border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity z-20"
                       title="Pin Video"
                     >
-                      <Pin className={`w-3.5 h-3.5 ${pinnedParticipantId === participant.id ? "text-cyan-400 fill-current" : ""}`} />
+                      <Pin className={`w-3.5 h-3.5 ${pinnedParticipantId === remotePeer.peerId ? "text-cyan-400 fill-current" : ""}`} />
                     </button>
                   </div>
                 ))}
@@ -578,7 +878,6 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                     </button>
                   </div>
 
-                  {/* Messages List */}
                   <div className="space-y-3 py-4 max-h-[350px] overflow-y-auto pr-1">
                     {chatMessages.map((msg) => (
                       <div key={msg.id} className={`flex flex-col ${msg.isSelf ? "items-end" : "items-start"}`}>
@@ -624,7 +923,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                   <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                     <h3 className="font-bold text-white text-sm flex items-center gap-2">
                       <Users className="w-4 h-4 text-cyan-400" />
-                      Call Participants (5)
+                      Connected Peers ({totalParticipantsCount})
                     </h3>
                     <button
                       onClick={() => setShowParticipantsSidebar(false)}
@@ -634,8 +933,8 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                     </button>
                   </div>
 
-                  {/* Roster List */}
                   <div className="space-y-2 py-4 max-h-[400px] overflow-y-auto">
+                    {/* Self */}
                     <div className="p-3 rounded-2xl bg-slate-900/90 border border-slate-800/80 flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-violet-600 to-cyan-500 flex items-center justify-center text-white text-xs font-bold">
@@ -643,24 +942,29 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                         </div>
                         <div>
                           <p className="text-xs font-bold text-white">{displayName} (You)</p>
-                          <p className="text-[10px] text-cyan-400 font-medium">WebRTC Live</p>
+                          <p className="text-[10px] text-cyan-400 font-medium">
+                            {isScreenSharing ? "Screen Presenter" : "Local Stream"}
+                          </p>
                         </div>
                       </div>
                       {micEnabled ? <Mic className="w-4 h-4 text-emerald-400" /> : <MicOff className="w-4 h-4 text-rose-400" />}
                     </div>
 
-                    {CALL_PARTICIPANTS.map((p) => (
-                      <div key={p.id} className="p-3 rounded-2xl bg-slate-900/60 border border-slate-800/60 flex items-center justify-between">
+                    {/* WebRTC Remote Peers */}
+                    {remotePeerList.map((p) => (
+                      <div key={p.peerId} className="p-3 rounded-2xl bg-slate-900/60 border border-slate-800/60 flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                          <div className={`w-8 h-8 rounded-full bg-gradient-to-tr ${p.gradient} flex items-center justify-center text-white text-xs font-bold`}>
-                            {p.initials}
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-white text-xs font-bold">
+                            {p.displayName.trim() ? p.displayName.trim().slice(0, 2).toUpperCase() : "PEER"}
                           </div>
                           <div>
-                            <p className="text-xs font-bold text-white">{p.name}</p>
-                            <p className="text-[10px] text-slate-400">{p.role} {p.isHost ? "• Host" : ""}</p>
+                            <p className="text-xs font-bold text-white">{p.displayName}</p>
+                            <p className="text-[10px] text-emerald-400 font-medium">
+                              {p.isScreenSharing ? "Presenting Screen" : "WebRTC Connected"}
+                            </p>
                           </div>
                         </div>
-                        {p.micOn ? <Mic className="w-4 h-4 text-emerald-400" /> : <MicOff className="w-4 h-4 text-rose-400" />}
+                        {p.micEnabled ? <Mic className="w-4 h-4 text-emerald-400" /> : <MicOff className="w-4 h-4 text-rose-400" />}
                       </div>
                     ))}
                   </div>
@@ -707,7 +1011,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
 
               <div className="relative aspect-video w-full rounded-3xl bg-slate-950 border border-slate-800 overflow-hidden shadow-2xl flex flex-col items-center justify-center">
                 
-                {/* Real WebRTC Video Tag */}
+                {/* Real WebRTC Video Element */}
                 <video
                   ref={lobbyVideoRef}
                   autoPlay
@@ -718,7 +1022,6 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                   }`}
                 />
 
-                {/* Fallback Placeholder when Camera Off or Error */}
                 {(!camEnabled || mediaError) && (
                   <div className="flex flex-col items-center justify-center text-slate-500 space-y-2 p-6 text-center">
                     <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center font-bold text-2xl text-white shadow-glow">
@@ -730,7 +1033,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                   </div>
                 )}
 
-                {/* Floating Live Status Bar */}
+                {/* Floating Status Bar */}
                 <div className="absolute top-4 left-4 right-4 flex items-center justify-between pointer-events-none z-20">
                   <div className="glass-pill px-3 py-1.5 rounded-xl text-xs font-semibold text-white flex items-center gap-2 border border-white/10">
                     <span className={`w-2.5 h-2.5 rounded-full ${camEnabled && !mediaError ? "bg-emerald-400 animate-pulse" : "bg-slate-500"}`} />
@@ -810,7 +1113,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
               <div className="space-y-4">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs font-semibold">
                   <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-                  <span>Ready to Join Meeting</span>
+                  <span>Ready to Join Multi-User Room</span>
                 </div>
 
                 <div>
@@ -935,17 +1238,21 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
                 {camEnabled ? <Video className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400" /> : <VideoOff className="w-4 h-4 sm:w-5 sm:h-5 text-rose-400" />}
               </button>
 
-              {/* Screen Share Button */}
+              {/* Real Screen Share Button (getDisplayMedia) */}
               <button
-                onClick={() => setScreenSharing(!screenSharing)}
+                onClick={toggleScreenSharing}
                 className={`p-3 sm:p-3.5 rounded-2xl border transition-all flex items-center justify-center ${
-                  screenSharing
-                    ? "bg-cyan-500/20 border-cyan-500/50 text-cyan-300 shadow-glow-cyan"
+                  isScreenSharing
+                    ? "bg-cyan-500/20 border-cyan-400 text-cyan-300 ring-2 ring-cyan-500/40 shadow-glow-cyan"
                     : "bg-slate-800 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700"
                 }`}
-                title={screenSharing ? "Stop Sharing Screen" : "Share Screen"}
+                title={isScreenSharing ? "Stop Sharing Screen" : "Share Screen"}
               >
-                {screenSharing ? <MonitorOff className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400" /> : <Monitor className="w-4 h-4 sm:w-5 sm:h-5" />}
+                {isScreenSharing ? (
+                  <MonitorOff className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400" />
+                ) : (
+                  <Monitor className="w-4 h-4 sm:w-5 sm:h-5" />
+                )}
               </button>
 
               {/* Chat Button */}
@@ -980,7 +1287,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
               >
                 <Users className="w-4 h-4 sm:w-5 sm:h-5" />
                 <span className="absolute -top-1.5 -right-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500 text-white">
-                  5
+                  {totalParticipantsCount}
                 </span>
               </button>
 
@@ -1013,7 +1320,7 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
       {/* Pre-Join Footer Disclaimer */}
       {!hasJoined && (
         <footer className="relative z-10 py-6 text-center text-xs text-slate-500">
-          &copy; {new Date().getFullYear()} UniCall Inc. WebRTC Media Stream Standard.
+          &copy; {new Date().getFullYear()} UniCall Inc. Browser Screen Capture & WebRTC Peer Mesh Standard.
         </footer>
       )}
     </div>
