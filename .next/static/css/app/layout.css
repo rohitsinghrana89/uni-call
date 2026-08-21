@@ -808,6 +808,9 @@ video {
 .block {
   display: block;
 }
+.inline-block {
+  display: inline-block;
+}
 .flex {
   display: flex;
 }
@@ -1082,6 +1085,9 @@ video {
 .max-w-xl {
   max-width: 36rem;
 }
+.max-w-\[120px\] {
+  max-width: 120px;
+}
 .flex-1 {
   flex: 1 1 0%;
 }
@@ -1299,6 +1305,9 @@ video {
 .divide-slate-800\/80 > :not([hidden]) ~ :not([hidden]) {
   border-color: rgb(30 41 59 / 0.8);
 }
+.self-start {
+  align-self: flex-start;
+}
 .self-end {
   align-self: flex-end;
 }
@@ -1478,6 +1487,9 @@ video {
 }
 .border-white\/30 {
   border-color: rgb(255 255 255 / 0.3);
+}
+.border-rose-500\/20 {
+  border-color: rgb(244 63 94 / 0.2);
 }
 .border-t-cyan-400 {
   --tw-border-opacity: 1;

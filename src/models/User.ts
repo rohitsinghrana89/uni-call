@@ -47,7 +47,7 @@ const UserSchema = new Schema<IUser>(
   }
 );
 
-if (mongoose.models.User && mongoose.models.User.collection?.name !== "users") {
+if (mongoose.models.User && (mongoose.models.User.collection?.name !== "users" || mongoose.models.User.db?.name !== "video_conference")) {
   delete mongoose.models.User;
 }
 

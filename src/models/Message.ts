@@ -44,7 +44,7 @@ const MessageSchema = new Schema<IMessage>(
   }
 );
 
-if (mongoose.models.Message && mongoose.models.Message.collection?.name !== "messages") {
+if (mongoose.models.Message && (mongoose.models.Message.collection?.name !== "messages" || mongoose.models.Message.db?.name !== "video_conference")) {
   delete mongoose.models.Message;
 }
 

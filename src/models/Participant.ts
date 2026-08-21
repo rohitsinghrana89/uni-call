@@ -43,7 +43,7 @@ const ParticipantSchema = new Schema<IParticipant>(
   }
 );
 
-if (mongoose.models.Participant && mongoose.models.Participant.collection?.name !== "participants") {
+if (mongoose.models.Participant && (mongoose.models.Participant.collection?.name !== "participants" || mongoose.models.Participant.db?.name !== "video_conference")) {
   delete mongoose.models.Participant;
 }
 

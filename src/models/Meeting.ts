@@ -62,7 +62,7 @@ const MeetingSchema = new Schema<IMeeting>(
   }
 );
 
-if (mongoose.models.Meeting && mongoose.models.Meeting.collection?.name !== "meetings") {
+if (mongoose.models.Meeting && (mongoose.models.Meeting.collection?.name !== "meetings" || mongoose.models.Meeting.db?.name !== "video_conference")) {
   delete mongoose.models.Meeting;
 }
 

@@ -3,6 +3,7 @@
 import { useState, FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { setStoredUser } from "@/lib/auth";
 import { 
   Video, 
   User,
@@ -101,7 +102,8 @@ export default function SignupPage() {
       const data = await res.json();
       setIsLoading(false);
 
-      if (data.success) {
+      if (data.success && data.user) {
+        setStoredUser(data.user);
         setSignupSuccess(true);
         setTimeout(() => {
           router.push("/dashboard");

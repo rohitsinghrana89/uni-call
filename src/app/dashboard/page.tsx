@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { getStoredUser, clearStoredUser, getUserInitials, UserSession } from "@/lib/auth";
 import {
   Video,
   Plus,
@@ -156,9 +157,27 @@ const MEETING_HISTORY = [
 
 export default function DashboardPage() {
   const router = useRouter();
+  const [currentUser, setCurrentUser] = useState<UserSession | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "upcoming" | "recent" | "history" | "settings">("overview");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+
+  useEffect(() => {
+    const sessionUser = getStoredUser();
+    if (sessionUser) {
+      setCurrentUser(sessionUser);
+    }
+  }, []);
+
+  const displayName = currentUser?.name || "User";
+  const displayEmail = currentUser?.email || "No email available";
+  const displayInitials = getUserInitials(currentUser?.name);
+
+  const handleLogout = () => {
+    clearStoredUser();
+    setCurrentUser(null);
+    router.push("/login");
+  };
 
   // Join Meeting state
   const [joinCode, setJoinCode] = useState("");
@@ -203,7 +222,7 @@ export default function DashboardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: "Instant HD Meeting",
-          host: "Alex Morgan",
+          host: displayName,
         }),
       });
 
@@ -436,17 +455,17 @@ export default function DashboardPage() {
             <div className="flex items-center gap-3">
               <div className="relative">
                 <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center font-bold text-white shadow-glow text-sm">
-                  AM
+                  {displayInitials}
                 </div>
                 <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-[#080B11] rounded-full"></span>
               </div>
               <div className="flex flex-col">
-                <span className="text-sm font-semibold text-white leading-tight">Alex Morgan</span>
-                <span className="text-xs text-slate-400 truncate max-w-[130px]">alex@company.com</span>
+                <span className="text-sm font-semibold text-white leading-tight">{displayName}</span>
+                <span className="text-xs text-slate-400 truncate max-w-[130px]">{displayEmail}</span>
               </div>
             </div>
             <button
-              onClick={() => router.push("/login")}
+              onClick={handleLogout}
               className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition-all"
               title="Log Out"
             >
@@ -467,7 +486,7 @@ export default function DashboardPage() {
               <span>4K Ultra HD Engine & Spatial Audio Ready</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
-              Welcome back, Alex 👋
+              Welcome back, {displayName} 👋
             </h1>
             <p className="text-xs sm:text-sm text-slate-400 mt-1">
               Manage your HD video rooms, schedule team conferences, and access recordings.
@@ -883,8 +902,31 @@ export default function DashboardPage() {
         {activeTab === "settings" && (
           <div className="space-y-6 max-w-3xl">
             <div>
-              <h2 className="text-2xl font-bold text-white">Audio & Video Settings</h2>
-              <p className="text-xs text-slate-400">Configure your hardware devices, spatial audio, and AI noise suppression</p>
+              <h2 className="text-2xl font-bold text-white">Account & System Settings</h2>
+              <p className="text-xs text-slate-400">Manage your profile information, hardware devices, and audio preferences</p>
+            </div>
+
+            {/* User Profile Info Card */}
+            <div className="glass-panel border border-slate-800/80 rounded-2xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center font-bold text-white shadow-glow text-xl">
+                  {displayInitials}
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">{displayName}</h3>
+                  <p className="text-xs text-slate-400 font-mono mt-0.5">{displayEmail}</p>
+                  <span className="inline-block mt-2 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                    video_conference.users
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-rose-400 hover:bg-rose-500/10 border border-rose-500/20 flex items-center gap-2 self-start sm:self-center transition-all"
+              >
+                <LogOut className="w-4 h-4" />
+                Sign Out
+              </button>
             </div>
 
             <div className="glass-panel border border-slate-800/80 rounded-2xl p-6 space-y-6">

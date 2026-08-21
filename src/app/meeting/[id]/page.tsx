@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, use, FormEvent, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { getStoredUser } from "@/lib/auth";
 import {
   Video,
   VideoOff,
@@ -81,7 +82,13 @@ export default function MeetingRoomPage({ params }: { params: Promise<{ id: stri
   const [loading, setLoading] = useState(true);
 
   // User & Pre-join Lobby States
-  const [displayName, setDisplayName] = useState("Alex Morgan");
+  const [displayName, setDisplayName] = useState(() => {
+    if (typeof window !== "undefined") {
+      const u = getStoredUser();
+      if (u?.name) return u.name;
+    }
+    return "Alex Morgan";
+  });
   const [nameError, setNameError] = useState("");
   const [copied, setCopied] = useState(false);
   const [hasJoined, setHasJoined] = useState(false);
